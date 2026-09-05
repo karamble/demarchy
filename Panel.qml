@@ -52,6 +52,11 @@ Panel {
   // because nothing else reads it.
   property double now: Date.now()
   property int helperRetries: 0
+  // Set when the helper cannot be started at all. Installing from the
+  // marketplace clones the repository but builds nothing, so this is the state
+  // a first-time install lands in, and it needs to say so rather than sit on
+  // "connecting" for ever.
+  property bool helperMissing: false
 
   readonly property bool reachable: !!snap && snap.reachable === true
   readonly property string errorCode: snap && snap.error ? String(snap.error) : ""
@@ -110,6 +115,7 @@ Panel {
     if (!parsed || typeof parsed !== "object" || Number(parsed.v) !== 2) return
     root.snap = parsed
     root.helperRetries = 0
+    root.helperMissing = false
     // A confirmed add or edit closes the form; a refused one leaves it open
     // with the reason under it, so the entry can be corrected rather than
     // retyped from scratch.
@@ -159,8 +165,28 @@ Panel {
       if (root.effectiveMonitoring && root.helperRetries < 5) {
         root.helperRetries++
         restartTimer.restart()
+        return
       }
+      // Note: a binary that does not exist never reaches here. Quickshell logs
+      // "Process failed to start" and emits no exited signal at all, so the
+      // missing-helper case is caught by startupProbe below instead.
     }
+  }
+
+  // Quickshell emits no exited signal when a binary is missing: it warns once
+  // and leaves `running` false, so nothing downstream ever hears about it. Ask
+  // the shell instead. `test` always starts and always answers, which turns a
+  // silent non-event into an exit code.
+  function probeHelper() {
+    if (helperProbe.running) return
+    helperProbe.command = ["test", "-x", root.helperPath]
+    helperProbe.running = true
+  }
+
+  Process {
+    id: helperProbe
+    running: false
+    onExited: function (code) { root.helperMissing = code !== 0 }
   }
 
   Timer {
@@ -198,6 +224,7 @@ Panel {
     var v = value === true
     root.pendingMonitoring = v
     root.helperRetries = 0
+    if (v) root.probeHelper()
     if (!v) root.snap = null
     persist({ monitoring: v })
   }
@@ -209,6 +236,7 @@ Panel {
 
   onOpenedChanged: {
     if (root.opened) {
+      root.probeHelper()
       root.markRead()
     } else {
       // Re-mask on close, so a revealed balance never survives into the next
@@ -481,6 +509,11 @@ Panel {
           wrapMode: Text.WordWrap
           text: {
             if (!root.effectiveMonitoring) return "Monitoring is off. The switch above turns it on."
+            if (root.helperMissing)
+              return "The helper is not built yet. In a terminal:\n\n"
+                     + "    cd " + root.pluginDir + " && make build\n\n"
+                     + "It needs Go 1.24 or newer, and builds nothing but the two "
+                     + "helpers in bin/."
             if (root.errorCode !== "") return Model.errorLine(root.errorCode, root.snap ? root.snap.detail : "")
             if (!root.snap) return "Connecting to dcrpulse…"
             return ""

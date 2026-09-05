@@ -30,10 +30,14 @@ MCP interface, with a token that can only read.
 
 ```bash
 omarchy plugin add https://github.com/karamble/demarchy.git --enable
+cd ~/.config/omarchy/plugins/karamble.demarchy && make build
 ```
 
-Add a connection, flip the switch in the panel, done. From a checkout it is just
-`make install`.
+**The second line matters.** No binaries are shipped here, so the two small Go
+helpers are compiled on your own machine. It needs Go 1.24 or newer and builds
+nothing else. The panel tells you if you skip it.
+
+Then add a connection, flip the switch in the panel, and you are done.
 
 ## Connections
 

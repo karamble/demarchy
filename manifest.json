@@ -5,7 +5,7 @@
   "version": "0.1.0",
   "author": "karamble",
   "license": "ISC",
-  "description": "Decred staking, node, Lightning and Bison Relay status in the bar, read from one or more local dcrpulse instances over read-only MCP tokens.",
+  "description": "Decred staking, node and Bison Relay status in the bar",
   "repository": "https://github.com/karamble/demarchy",
   "kinds": [
     "bar-widget"
@@ -15,7 +15,7 @@
   },
   "barWidget": {
     "displayName": "Demarchy",
-    "description": "Decred node sync, ticket price and unread Bison Relay messages, live from a local dcrpulse.",
+    "description": "Your staking record, ticket price and unread Bison Relay messages",
     "category": "Finance",
     "aliases": [
       "decred",
