@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "id": "karamble.demarchy",
+  "name": "Demarchy",
+  "version": "0.1.0",
+  "author": "karamble",
+  "license": "ISC",
+  "description": "Decred staking, node, Lightning and Bison Relay status in the bar, read from one or more local dcrpulse instances over read-only MCP tokens.",
+  "repository": "https://github.com/karamble/demarchy",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Demarchy",
+    "description": "Decred node sync, ticket price and unread Bison Relay messages, live from a local dcrpulse.",
+    "category": "Finance",
+    "aliases": [
+      "decred",
+      "dcr",
+      "dcrpulse",
+      "staking",
+      "tickets",
+      "bisonrelay",
+      "node"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "monitoring": false,
+      "countPrivate": true,
+      "countGroupchat": true,
+      "showBalances": false,
+      "activeConnection": ""
+    },
+    "schema": [
+      {
+        "key": "monitoring",
+        "type": "boolean",
+        "label": "Monitor dcrpulse",
+        "description": "Off means the widget opens no connection at all; the bar shows the greyed mark alone and the panel keeps the last snapshot.",
+        "defaultValue": false
+      },
+      {
+        "key": "countPrivate",
+        "type": "boolean",
+        "label": "Count private messages",
+        "description": "Incoming PMs raise the unread count and colour the bar mark.",
+        "defaultValue": true
+      },
+      {
+        "key": "countGroupchat",
+        "type": "boolean",
+        "label": "Count group chats",
+        "description": "Group messages raise the unread count too. A busy group can keep the mark permanently lit; turn this off to let private messages stand out.",
+        "defaultValue": true
+      },
+      {
+        "key": "showBalances",
+        "type": "boolean",
+        "label": "Show wallet balances",
+        "description": "Off hides the balance rows entirely. On, they are masked until you reveal them, and re-mask when the panel closes.",
+        "defaultValue": false
+      },
+      {
+        "key": "activeConnection",
+        "type": "string",
+        "label": "Active connection",
+        "description": "Which stored dcrpulse connection the panel shows. Set by the switcher in the panel footer; connections themselves live in ~/.config/demarchy/connections.json.",
+        "defaultValue": ""
+      }
+    ]
+  }
+}
