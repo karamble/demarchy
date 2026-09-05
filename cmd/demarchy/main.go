@@ -743,5 +743,11 @@ func applyOnce(ctx context.Context, out *bufio.Writer) {
 		reply(&dcr.ConnResult{Op: cmd.Cmd, Error: code, Detail: detail})
 		return
 	}
-	reply(apply(ctx, &session{list: list}, cmd))
+	sess := &session{list: list}
+	// The one-shot builds a client too, for the capability check and for a
+	// switch, and a client with no policy refuses every plain-http endpoint the
+	// file allows. The running helper installs this at startup; this path has
+	// to do the same.
+	sess.setPolicy(list.Policy())
+	reply(apply(ctx, sess, cmd))
 }

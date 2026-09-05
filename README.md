@@ -64,14 +64,24 @@ rather than the settings page, and it is narrow on purpose:
 
 ```bash
 demarchy-setup allow-http 100.83.12.7/32 --via wt0
+demarchy-setup allow-http acekool.blacknet.internal
 demarchy-setup disallow-http 100.83.12.7/32
 ```
 
 Only carrier-grade NAT addresses, `100.64.0.0/10`, which is what mesh software
-hands out and what ordinary home and cafe networks never do. Only numeric
-addresses, never names, because a name can resolve somewhere else between typing
-it and dialling it. And the traffic is pinned to the interface you name, so with
-the tunnel down nothing is sent at all rather than sent to whoever answers.
+hands out and what ordinary home and cafe networks never do. The traffic is
+pinned to the interface you name, so with the tunnel down nothing is sent at all
+rather than sent to whoever answers.
+
+A mesh hostname works too, and has to be listed the same way. Being listed is
+not enough on its own: the name is resolved once when the connection is made,
+and the address it answers with has to be one of the ranges above, or nothing is
+sent. So the ranges stay the statement of what is reachable and the name is only
+what you call it.
+
+Type the endpoint with an explicit `http://` either way. A bare host is promoted
+to https on purpose, so plain text is something you ask for rather than
+something you fall into.
 
 ## The token
 

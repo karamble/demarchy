@@ -309,6 +309,11 @@ func NormaliseEndpointWith(in string, p Policy) (string, error) {
 		ep.scheme = "https"
 	case ep.scheme == "http" && ep.addr.IsValid() && p.Covers(ep.addr):
 		// A listed mesh address, reached over a bound interface.
+	case ep.scheme == "http" && !ep.addr.IsValid() && p.CoversName(ep.hostname()):
+		// A mesh name. Whether it actually points inside the policy is settled
+		// when it is dialled, because that is when the answer is true. Adding a
+		// connection dials it, so a name pointing elsewhere is refused here too,
+		// with the reason, rather than being stored and failing later.
 	case ep.scheme == "http":
 		return "", fmt.Errorf("%w: %s", ErrPlaintextRefused, p.Refusal(ep.hostname()))
 	}

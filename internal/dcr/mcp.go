@@ -175,16 +175,29 @@ func (c *Client) dial(ctx context.Context, network, address string) (net.Conn, e
 		return d.DialContext(ctx, network, address)
 	}
 
-	host, _, err := net.SplitHostPort(address)
+	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		return nil, err
 	}
 	addr, addrErr := netip.ParseAddr(host)
-	local := addrErr == nil && addr.IsLoopback()
+	lower := strings.ToLower(host)
+	local := (addrErr == nil && addr.IsLoopback()) ||
+		lower == "localhost" || strings.HasSuffix(lower, ".localhost")
 
 	p := c.policy()
 	if !local {
-		if addrErr != nil || !p.Covers(addr) {
+		if addrErr != nil {
+			// A listed mesh name. Resolve it once here and connect to the
+			// answer, rather than handing the name to the stack to resolve
+			// again independently: the address a name stands for is only true
+			// at the moment of connecting, and this is that moment.
+			resolved, err := p.ResolveCovered(ctx, host)
+			if err != nil {
+				return nil, err
+			}
+			addr = resolved
+			address = net.JoinHostPort(addr.String(), port)
+		} else if !p.Covers(addr) {
 			return nil, fmt.Errorf("%w: %s", ErrPlaintextRefused, p.Refusal(host))
 		}
 		if err := meshUp(p.Interface()); err != nil {

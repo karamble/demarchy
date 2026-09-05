@@ -5,8 +5,10 @@
 package dcr
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"net/url"
 	"strings"
@@ -47,7 +49,12 @@ var (
 type PlainHTTP struct {
 	Interface string   `json:"interface"`
 	Networks  []string `json:"networks"`
-	Note      string   `json:"note,omitempty"`
+	// Names are mesh hostnames that may be used instead of an address. A name
+	// must be listed here AND resolve into Networks when it is dialled, so the
+	// config stays the whole statement of what is reachable rather than
+	// delegating that to whatever the resolver happens to say.
+	Names []string `json:"names,omitempty"`
+	Note  string   `json:"note,omitempty"`
 }
 
 // PlainHTTPPublic is what the panel is told about the exception: enough to
@@ -55,6 +62,7 @@ type PlainHTTP struct {
 type PlainHTTPPublic struct {
 	Interface string   `json:"interface"`
 	Networks  []string `json:"networks"`
+	Names     []string `json:"names,omitempty"`
 }
 
 // Public renders the policy for the panel, or nil when none is in force.
@@ -62,7 +70,7 @@ func (p Policy) Public() *PlainHTTPPublic {
 	if !p.Enabled() {
 		return nil
 	}
-	return &PlainHTTPPublic{Interface: p.iface, Networks: p.Networks()}
+	return &PlainHTTPPublic{Interface: p.iface, Networks: p.Networks(), Names: p.Names()}
 }
 
 // Policy is a parsed PlainHTTP. The zero value is the default rule, where only
@@ -70,6 +78,30 @@ func (p Policy) Public() *PlainHTTPPublic {
 type Policy struct {
 	iface string
 	nets  []netip.Prefix
+	names []string
+}
+
+// Names is the configured hostname list, for display.
+func (p Policy) Names() []string {
+	if len(p.names) == 0 {
+		return nil
+	}
+	return append([]string(nil), p.names...)
+}
+
+// CoversName reports whether a hostname was listed. Being listed is necessary
+// and not sufficient: where it resolves is checked separately, at the dial.
+func (p Policy) CoversName(host string) bool {
+	if !p.Enabled() {
+		return false
+	}
+	h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(host), "."))
+	for _, n := range p.names {
+		if n == h {
+			return true
+		}
+	}
+	return false
 }
 
 // Enabled reports whether any exception is in force.
@@ -134,6 +166,13 @@ func (p Policy) CheckURL(u *url.URL) error {
 	if ep.addr.IsValid() && p.Covers(ep.addr) {
 		return nil
 	}
+	// A name is let through here and settled at the dial, which resolves it and
+	// refuses anything that does not land inside the policy. Doing it there
+	// rather than here is the point: the address a name resolves to is only
+	// true at the moment of connecting, so that is the moment to check it.
+	if !ep.addr.IsValid() && p.CoversName(ep.hostname()) {
+		return nil
+	}
 	return fmt.Errorf("%w: %s", ErrPlaintextRefused, p.Refusal(ep.hostname()))
 }
 
@@ -155,6 +194,30 @@ func (p Policy) Refusal(host string) string {
 	}
 	return fmt.Sprintf("plain http is allowed via %s to %s only. Add this peer "+
 		"with: demarchy-setup allow-http %s/32", p.iface, strings.Join(p.Networks(), ", "), host)
+}
+
+// ResolveCovered turns a hostname into the one address the policy allows, so
+// the dial can be pinned to it.
+//
+// Resolving and then letting the stack resolve again independently is the hole
+// this avoids: the name is looked up once, an allowed answer is chosen, and the
+// connection is made to that address rather than to the name.
+func (p Policy) ResolveCovered(ctx context.Context, host string) (netip.Addr, error) {
+	if !p.CoversName(host) {
+		return netip.Addr{}, fmt.Errorf("%w: %s", ErrPlaintextRefused, p.Refusal(host))
+	}
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return netip.Addr{}, fmt.Errorf("%w: %s did not resolve: %v",
+			ErrPlaintextRefused, host, err)
+	}
+	for _, ip := range ips {
+		if p.Covers(ip) {
+			return ip.Unmap(), nil
+		}
+	}
+	return netip.Addr{}, fmt.Errorf("%w: %s resolves outside %s",
+		ErrPlaintextRefused, host, strings.Join(p.Networks(), ", "))
 }
 
 // ParsePolicy validates the expert setting. Every failure names the entry and
@@ -218,7 +281,45 @@ func ParsePolicy(in *PlainHTTP) (Policy, error) {
 		seen[n] = true
 		nets = append(nets, n)
 	}
-	return Policy{iface: iface, nets: nets}, nil
+	names := make([]string, 0, len(in.Names))
+	seenName := map[string]bool{}
+	for i, raw := range in.Names {
+		where := fmt.Sprintf("plainHttp.names[%d] %q", i, clip(raw))
+		h := strings.ToLower(strings.TrimSuffix(strings.TrimSpace(raw), "."))
+		switch {
+		case h == "":
+			return Policy{}, fmt.Errorf("%s: empty", where)
+		case len(h) > 253:
+			return Policy{}, fmt.Errorf("%s: too long for a hostname", where)
+		case !validHostname(h):
+			return Policy{}, fmt.Errorf("%s: not a hostname", where)
+		case seenName[h]:
+			return Policy{}, fmt.Errorf("%s: listed twice", where)
+		}
+		// A name that is really an address would sidestep the network rules.
+		if _, err := netip.ParseAddr(h); err == nil {
+			return Policy{}, fmt.Errorf("%s: that is an address, put it in networks as %s/32", where, h)
+		}
+		seenName[h] = true
+		names = append(names, h)
+	}
+	return Policy{iface: iface, nets: nets, names: names}, nil
+}
+
+// validHostname accepts the shape of a DNS name and nothing else, so a value
+// that would be read as something other than a host cannot be listed.
+func validHostname(h string) bool {
+	if strings.HasPrefix(h, "-") || strings.HasSuffix(h, "-") || strings.Contains(h, "..") {
+		return false
+	}
+	for _, r := range h {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '.':
+		default:
+			return false
+		}
+	}
+	return strings.Contains(h, ".")
 }
 
 // clip keeps a hostile config value from filling the panel or the journal.

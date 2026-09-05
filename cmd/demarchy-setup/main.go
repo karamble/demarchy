@@ -440,13 +440,15 @@ func allowHTTP(list *dcr.Connections, args []string) error {
 		}
 	}
 	if cidr == "" {
-		return errors.New("usage: demarchy-setup allow-http <cidr> [--via <interface>] [--note <text>]")
+		return errors.New("usage: demarchy-setup allow-http <cidr|mesh-hostname> " +
+			"[--via <interface>] [--note <text>]")
 	}
 
 	next := &dcr.PlainHTTP{}
 	if list.PlainHTTP != nil {
 		*next = *list.PlainHTTP
 		next.Networks = append([]string(nil), list.PlainHTTP.Networks...)
+		next.Names = append([]string(nil), list.PlainHTTP.Names...)
 	}
 	if iface != "" {
 		next.Interface = iface
@@ -457,12 +459,19 @@ func allowHTTP(list *dcr.Connections, args []string) error {
 	if note != "" {
 		next.Note = note
 	}
-	for _, have := range next.Networks {
-		if have == cidr {
+	// One verb for both: an address range goes in networks, a mesh hostname in
+	// names. A name must also resolve into the networks when it is dialled, so
+	// adding one never widens what is reachable, only what it may be called.
+	target := &next.Networks
+	if !strings.Contains(cidr, "/") && net.ParseIP(strings.TrimSuffix(cidr, ".")) == nil {
+		target = &next.Names
+	}
+	for _, have := range *target {
+		if strings.EqualFold(have, cidr) {
 			return fmt.Errorf("%s is already allowed", cidr)
 		}
 	}
-	next.Networks = append(next.Networks, cidr)
+	*target = append(*target, cidr)
 
 	if err := list.SetPlainHTTP(next); err != nil {
 		return err
@@ -495,10 +504,19 @@ func disallowHTTP(list *dcr.Connections, args []string) error {
 		}
 		next.Networks = append(next.Networks, have)
 	}
+	for _, have := range list.PlainHTTP.Names {
+		if strings.EqualFold(have, cidr) {
+			found = true
+			continue
+		}
+		next.Names = append(next.Names, have)
+	}
 	if !found {
 		return fmt.Errorf("%s is not in the list", cidr)
 	}
 
+	// Names without networks allow nothing, since a name is only ever reached
+	// by resolving it into one, so the whole object goes with the last range.
 	if len(next.Networks) == 0 {
 		// The last range going means the whole object goes, and the file drops
 		// back to version 1.
@@ -545,6 +563,9 @@ func printPolicy(list *dcr.Connections) {
 		return
 	}
 	fmt.Printf("plain http via %s to: %s\n", p.Interface(), strings.Join(p.Networks(), ", "))
+	if names := p.Names(); len(names) > 0 {
+		fmt.Printf("  by name: %s\n", strings.Join(names, ", "))
+	}
 	if list.PlainHTTP != nil && list.PlainHTTP.Note != "" {
 		fmt.Printf("  note: %s\n", list.PlainHTTP.Note)
 	}

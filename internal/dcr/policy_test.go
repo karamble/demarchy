@@ -136,3 +136,64 @@ func TestNormaliseEndpointWithPolicy(t *testing.T) {
 		t.Fatal("an unlisted mesh address must still be refused")
 	}
 }
+
+// A name has to be listed. Resolving into an allowed range is necessary and is
+// checked at the dial, but it is not on its own permission to be used: the
+// config stays the whole statement of what is reachable.
+func TestNamesMustBeListed(t *testing.T) {
+	p, err := ParsePolicy(&PlainHTTP{
+		Interface: "wt0",
+		Networks:  []string{"100.83.167.198/32"},
+		Names:     []string{"acekool.blacknet.internal"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !p.CoversName("acekool.blacknet.internal") {
+		t.Error("the listed name should be covered")
+	}
+	if !p.CoversName("ACEKOOL.blacknet.internal.") {
+		t.Error("a name should match regardless of case or a trailing dot")
+	}
+	for _, host := range []string{"husky.blacknet.internal", "evil.example", ""} {
+		if p.CoversName(host) {
+			t.Errorf("%q is not listed and must not be covered", host)
+		}
+	}
+
+	got, err := NormaliseEndpointWith("http://acekool.blacknet.internal:8090", p)
+	if err != nil || got != "http://acekool.blacknet.internal:8090" {
+		t.Fatalf("a listed name over http should be allowed, got %q %v", got, err)
+	}
+	if _, err := NormaliseEndpointWith("http://husky.blacknet.internal:8090", p); err == nil {
+		t.Fatal("an unlisted name over http must be refused")
+	}
+	// A bare name is still promoted, so the exception stays something asked for.
+	got, err = NormaliseEndpointWith("acekool.blacknet.internal:8090", p)
+	if err != nil || got != "https://acekool.blacknet.internal:8090" {
+		t.Fatalf("a bare name must still promote to https, got %q %v", got, err)
+	}
+}
+
+func TestParsePolicyRefusesBadNames(t *testing.T) {
+	bad := map[string][]string{
+		"empty":          {""},
+		"not a hostname": {"not a host name"},
+		"no dot":         {"acekool"},
+		"an address":     {"100.83.167.198"},
+		"leading hyphen": {"-acekool.internal"},
+		"double dot":     {"acekool..internal"},
+		"listed twice":   {"a.internal", "A.internal"},
+	}
+	for why, names := range bad {
+		_, err := ParsePolicy(&PlainHTTP{
+			Interface: "wt0",
+			Networks:  []string{"100.83.167.198/32"},
+			Names:     names,
+		})
+		if err == nil {
+			t.Errorf("%s: %v should be refused", why, names)
+		}
+	}
+}
