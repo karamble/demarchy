@@ -99,10 +99,17 @@ func main() {
 		overrideEndpoint: *endpoint,
 		overrideToken:    *tokenFile,
 	}
+	// A connection that fails at startup is reported and then retried, not a
+	// reason to quit. Exiting here left the panel with nothing: the process was
+	// gone before its one line could be read, so a rejected token looked
+	// exactly like "still connecting", and it could never recover on its own
+	// once the token was fixed.
 	if err := sess.use(ctx, dcr.StringSetting("activeConnection", "")); err != nil {
 		code, detail := dcr.Classify(err)
-		fail(code, detail)
-		return
+		if *once || sess.client == nil {
+			fail(code, detail)
+			return
+		}
 	}
 
 	if *once {
@@ -286,6 +293,42 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 		return p
 	}
 
+	// Command handling has to be reachable from two places: the stream loop
+	// below and the backoff wait after a failure. A switch issued because the
+	// current connection is failing is exactly the moment it matters most, and
+	// a sleep that ignored commands left the panel pinned to a dead connection
+	// until the backoff happened to expire.
+	handleCommand := func(cmd command) (restart, quit bool) {
+		switch cmd.Cmd {
+		case "markRead":
+			count.reset()
+			poke("")
+		case "refresh":
+			poke("")
+		case "quit":
+			return false, true
+		case "switch", "addConnection", "editConnection", "removeConnection":
+			result := apply(ctx, sess, cmd)
+			// The unread tally means "since you switched here", so a change of
+			// connection starts it again.
+			if cmd.Cmd == "switch" && result.OK {
+				count = counter{}
+			}
+			callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			snap := sess.decorate(dcr.Fetch(callCtx, sess.client, sess.opt))
+			cancel()
+			snap.Unread = count.unread()
+			snap.ConnResult = result
+			emit(snap)
+			// A new connection needs a new stream: the old one is bound to the
+			// previous server and its grant.
+			if result.OK && (cmd.Cmd == "switch" || cmd.Cmd == "removeConnection") {
+				return true, false
+			}
+		}
+		return false, false
+	}
+
 	backoff := time.Second
 	for ctx.Err() == nil {
 		streamCtx, cancelStream := context.WithCancel(ctx)
@@ -312,34 +355,14 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 			case <-streamCtx.Done():
 				break inner
 			case cmd := <-commands:
-				switch cmd.Cmd {
-				case "markRead":
-					count.reset()
-					poke("")
-				case "refresh":
-					poke("")
-				case "quit":
+				restart, quit := handleCommand(cmd)
+				if quit {
 					cancelStream()
 					return
-				case "switch", "addConnection", "editConnection", "removeConnection":
-					result := apply(ctx, sess, cmd)
-					// The unread tally means "since you switched here", so a
-					// change of connection starts it again.
-					if cmd.Cmd == "switch" && result.OK {
-						count = counter{}
-					}
-					callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-					snap := sess.decorate(dcr.Fetch(callCtx, sess.client, sess.opt))
-					cancel()
-					snap.Unread = count.unread()
-					snap.ConnResult = result
-					emit(snap)
-					// A new connection needs a new stream: the old one is
-					// bound to the previous server and its grant.
-					if result.OK && (cmd.Cmd == "switch" || cmd.Cmd == "removeConnection") {
-						cancelStream()
-						break inner
-					}
+				}
+				if restart {
+					cancelStream()
+					break inner
 				}
 			case <-refresh:
 				changed := takePending()
@@ -378,13 +401,31 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 			snap.Unread = count.unread()
 			emit(snap)
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(backoff):
-		}
-		if backoff < 60*time.Second {
-			backoff *= 2
+		timer := time.NewTimer(backoff)
+		for waiting := true; waiting; {
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case cmd := <-commands:
+				restart, quit := handleCommand(cmd)
+				if quit {
+					timer.Stop()
+					return
+				}
+				if restart {
+					// A new connection deserves a fresh start, not the backoff
+					// the old one had earned.
+					timer.Stop()
+					backoff = time.Second
+					waiting = false
+				}
+			case <-timer.C:
+				waiting = false
+				if backoff < 60*time.Second {
+					backoff *= 2
+				}
+			}
 		}
 	}
 }
