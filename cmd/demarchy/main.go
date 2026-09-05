@@ -38,6 +38,7 @@ func main() {
 		balances  = flag.Bool("balances", false, "include wallet balances (default: the showBalances setting)")
 		messages  = flag.Int("messages", 20, "chat ring entries to carry into the panel")
 		force     = flag.Bool("force", false, "ignore the monitoring switch (debugging only)")
+		apply1    = flag.Bool("apply", false, "read one JSON command from stdin, apply it, print the result and exit")
 		demo      = flag.Bool("demo", false, "emit a synthetic snapshot and exit; for building the panel, never used by the widget")
 	)
 	flag.Parse()
@@ -79,6 +80,17 @@ func main() {
 	// still makes no request.
 	if !*force && !dcr.BoolSetting("monitoring", false) {
 		fail("off", "monitoring is switched off")
+		return
+	}
+
+	// Connection changes run as a one-shot, not over the running helper's
+	// stdin. The helper only runs while monitoring is on, so routing add and
+	// edit through it meant the settings page silently did nothing whenever it
+	// was off, which is exactly when someone is setting their first connection
+	// up. Adding a connection contacts dcrpulse to validate the token, but the
+	// person asking for it is the consent the switch exists to require.
+	if *apply1 {
+		applyOnce(ctx, out)
 		return
 	}
 
@@ -299,6 +311,12 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 	// a sleep that ignored commands left the panel pinned to a dead connection
 	// until the backoff happened to expire.
 	handleCommand := func(cmd command) (restart, quit bool) {
+		// The list on disk may have moved under us: connection changes are
+		// applied by a separate one-shot process, so re-read before acting on
+		// anything. It is a small file and this is not a hot path.
+		if fresh, err := dcr.LoadConnections(); err == nil {
+			sess.list = fresh
+		}
 		switch cmd.Cmd {
 		case "markRead":
 			count.reset()
@@ -597,4 +615,37 @@ func subscriptions(opt dcr.FetchOptions) []string {
 		uris = append(uris, dcr.ResNodeSync)
 	}
 	return uris
+}
+
+// applyOnce reads a single command from stdin, applies it and prints the
+// result. It is what the settings page talks to, so managing connections works
+// whether or not monitoring is on.
+func applyOnce(ctx context.Context, out *bufio.Writer) {
+	reply := func(res *dcr.ConnResult) {
+		if b, err := json.Marshal(res); err == nil {
+			out.Write(b)
+			out.WriteByte('\n')
+			out.Flush()
+		}
+	}
+
+	sc := bufio.NewScanner(os.Stdin)
+	sc.Buffer(make([]byte, 0, 8*1024), 1<<20)
+	if !sc.Scan() {
+		reply(&dcr.ConnResult{Op: "apply", Error: "error", Detail: "no command on stdin"})
+		return
+	}
+	var cmd command
+	if err := json.Unmarshal([]byte(strings.TrimSpace(sc.Text())), &cmd); err != nil {
+		reply(&dcr.ConnResult{Op: "apply", Error: "error", Detail: "unreadable command"})
+		return
+	}
+
+	list, err := dcr.LoadConnections()
+	if err != nil {
+		code, detail := dcr.Classify(err)
+		reply(&dcr.ConnResult{Op: cmd.Cmd, Error: code, Detail: detail})
+		return
+	}
+	reply(apply(ctx, &session{list: list}, cmd))
 }

@@ -198,6 +198,60 @@ Panel {
 
   Process { id: setupProc }
 
+  // Connection changes go to a one-shot helper, not to the running one. The
+  // running helper only exists while monitoring is on, so routing them through
+  // it meant the settings page did nothing at all whenever it was off, which is
+  // exactly when a first connection is being added.
+  property var pendingApply: null
+
+  function applyConnection(obj) {
+    if (applyProc.running) return
+    root.pendingApply = obj
+    applyProc.command = [root.helperPath, "--apply"]
+    applyProc.running = true
+  }
+
+  Process {
+    id: applyProc
+    running: false
+    stdinEnabled: true
+    stdout: StdioCollector { id: applyOut; waitForEnd: true }
+    onStarted: {
+      write(JSON.stringify(root.pendingApply) + "\n")
+      root.pendingApply = null
+    }
+    onExited: {
+      var res = null
+      try { res = JSON.parse(String(applyOut.text || "").trim()) } catch (e) { res = null }
+      root.applyResult = res
+      if (res && res.ok) {
+        settingsView.connectionsView.cancel()
+        if (res.op === "removeConnection" && res.id === root.activeConnection) {
+          // The connection being watched just went away. The one-shot has no
+          // live session to fall back for us, so pick the successor here: the
+          // first one left, or nothing at all if that was the last.
+          var next = ""
+          for (var i = 0; i < root.connections.length; i++) {
+            if (root.connections[i].id !== res.id) {
+              next = root.connections[i].id
+              break
+            }
+          }
+          root.persist({ activeConnection: next })
+          if (next !== "") root.sendCommand({ cmd: "switch", id: next })
+          else root.refreshNow()
+        } else {
+          // The running helper is holding a list that just changed.
+          root.refreshNow()
+        }
+      }
+    }
+  }
+
+  // The one-shot's answer, which outranks whatever the running helper last
+  // said, because it is the reply to what the user just did.
+  property var applyResult: null
+
   Timer {
     interval: 5000
     repeat: true
@@ -216,6 +270,21 @@ Panel {
     root.settings = entry
     if (root.bar && root.bar.shell && typeof root.bar.shell.updateEntryInline === "function")
       root.bar.shell.updateEntryInline(root.moduleName, entry)
+  }
+
+  // Removing a connection deletes a stored credential, so it takes two
+  // decisions. The dialog lives here rather than in the settings page because
+  // it has to cover the whole card.
+  property var pendingRemove: null
+
+  function askRemove(id, name) {
+    root.pendingRemove = { id: id, name: name }
+  }
+
+  function confirmRemove() {
+    var p = root.pendingRemove
+    root.pendingRemove = null
+    if (p) root.applyConnection({ cmd: "removeConnection", id: p.id })
   }
 
   // The single choke point for the kill switch: panel toggle, middle-click and
@@ -363,7 +432,10 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
-      onCloseRequested: root.close()
+      onCloseRequested: {
+        if (root.pendingRemove) root.pendingRemove = null
+        else root.close()
+      }
       onTabRequested: function (direction) { root.switchPanel(direction) }
 
       // Omarchy is keyboard-first, so every action here has a key. The mouse
@@ -398,7 +470,27 @@ Panel {
                                       : (root.cursor + dy + n) % n
       }
       onActivateRequested: {
+        if (root.pendingRemove) { root.confirmRemove(); return }
         if (root.settingsOpen && root.cursor >= 0) settingsView.activateRow(root.cursor)
+      }
+
+      ConfirmDialog {
+        id: removeDialog
+        anchors.fill: parent
+        // Without a z the dialog paints in declaration order, so the settings
+        // content lands on top of it and the scrim looks see-through.
+        z: 20
+        opened: !!root.pendingRemove
+        message: root.pendingRemove
+                 ? "Remove \"" + root.pendingRemove.name + "\"? Its stored token is deleted too."
+                 : ""
+        confirmText: "Remove"
+        foreground: Color.popups.text
+        background: Color.popups.background
+        scrim: Util.alpha(Color.popups.background, 0.85)
+        selectedText: Color.urgent
+        onConfirmed: root.confirmRemove()
+        onCanceled: root.pendingRemove = null
       }
 
       ConnectionSwitcher {
@@ -636,14 +728,14 @@ Panel {
           tokenState: root.tokenState
           connections: root.connections
           activeConnection: root.activeConnection
-          connResult: root.connResult
+          connResult: root.applyResult ? root.applyResult : root.connResult
           onConnAdd: function (name, endpoint, token) {
-            root.sendCommand({ cmd: "addConnection", name: name, endpoint: endpoint, token: token })
+            root.applyConnection({ cmd: "addConnection", name: name, endpoint: endpoint, token: token })
           }
           onConnEdit: function (id, name, endpoint, token) {
-            root.sendCommand({ cmd: "editConnection", id: id, name: name, endpoint: endpoint, token: token })
+            root.applyConnection({ cmd: "editConnection", id: id, name: name, endpoint: endpoint, token: token })
           }
-          onConnRemove: function (id) { root.sendCommand({ cmd: "removeConnection", id: id }) }
+          onConnRemove: function (id, name) { root.askRemove(id, name) }
           onConnSwitch: function (id) { root.switchConnection(id) }
           onChanged: function (key, value) {
             if (key === "monitoring") root.setMonitoring(value)

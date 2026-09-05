@@ -28,7 +28,9 @@ Column {
 
   signal addRequested(string name, string endpoint, string token)
   signal editRequested(string id, string name, string endpoint, string token)
-  signal removeRequested(string id)
+  // The panel hosts the confirmation: ConfirmDialog is an overlay Item and
+  // needs a surface it can fill, which a Column cannot give it.
+  signal removeRequested(string id, string name)
   signal switchRequested(string id)
 
   spacing: Style.space(6)
@@ -146,7 +148,7 @@ Column {
           focusable: true
           fontSize: Style.font.caption
           foreground: Color.urgent
-          onClicked: confirmRemove.openFor(connRow.modelData)
+          onClicked: root.removeRequested(connRow.modelData.id, connRow.modelData.name)
         }
       }
     }
@@ -237,25 +239,5 @@ Column {
     color: Color.urgent
     font.family: Style.font.family
     font.pixelSize: Style.font.caption
-  }
-
-  ConfirmDialog {
-    id: confirmRemove
-    property var pending: null
-    // Keep both id and name, so a confirmation cannot delete whichever
-    // connection has since moved into that row.
-    function openFor(conn) {
-      pending = { id: conn.id, name: conn.name }
-      message = "Remove \"" + conn.name + "\"? Its stored token is deleted too."
-      confirmText = "Remove"
-      opened = true
-    }
-    onConfirmed: {
-      var value = pending
-      pending = null
-      opened = false
-      if (value) root.removeRequested(value.id)
-    }
-    onCanceled: { pending = null; opened = false }
   }
 }

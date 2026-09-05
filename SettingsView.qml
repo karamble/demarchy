@@ -37,7 +37,7 @@ Column {
 
   signal connAdd(string name, string endpoint, string token)
   signal connEdit(string id, string name, string endpoint, string token)
-  signal connRemove(string id)
+  signal connRemove(string id, string name)
   signal connSwitch(string id)
 
   // The panel closes the form when the helper confirms a save.
@@ -104,7 +104,7 @@ Column {
     result: root.connResult
     onAddRequested: function (name, endpoint, token) { root.connAdd(name, endpoint, token) }
     onEditRequested: function (id, name, endpoint, token) { root.connEdit(id, name, endpoint, token) }
-    onRemoveRequested: function (id) { root.connRemove(id) }
+    onRemoveRequested: function (id, name) { root.connRemove(id, name) }
     onSwitchRequested: function (id) { root.connSwitch(id) }
   }
 
