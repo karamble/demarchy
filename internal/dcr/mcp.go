@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -40,6 +41,67 @@ type Client struct {
 	token    string
 	hc       *http.Client
 	nextID   atomic.Int64
+
+	// Group chat names, keyed by gcid. Cached here rather than fetched per
+	// snapshot: the list is large, it changes about never, and it belongs to
+	// this connection, so switching connections gets a fresh one for free.
+	gcMu      sync.Mutex
+	gcNames   map[string]string
+	gcUnnamed map[string]bool
+}
+
+// resolveGroups returns the group name for each id it knows, re-reading the
+// list only when one of them is unfamiliar.
+//
+// Messages only ever arrive from groups we are in, so an unfamiliar id means
+// the cached list is behind and one re-read fixes it. The exception is the
+// ring's own history: after leaving a group its older messages sit there until
+// they roll off, and no list will ever name them. Those ids are remembered as
+// unnameable so their presence cannot make every fetch ask again.
+func (c *Client) resolveGroups(ctx context.Context, gcids []string) map[string]string {
+	c.gcMu.Lock()
+	names, unnamed := c.gcNames, c.gcUnnamed
+	c.gcMu.Unlock()
+
+	stale := names == nil
+	for _, id := range gcids {
+		if _, ok := names[id]; !ok && !unnamed[id] {
+			stale = true
+			break
+		}
+	}
+	if !stale {
+		return names
+	}
+
+	raw, err := c.Call(ctx, "br_groupchats", nil)
+	if err != nil {
+		// Leave the cache as it stands and try again next time.
+		return names
+	}
+	var payload struct {
+		GCs []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"gcs"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return names
+	}
+	fresh := make(map[string]string, len(payload.GCs))
+	for _, g := range payload.GCs {
+		fresh[g.ID] = g.Name
+	}
+	gone := map[string]bool{}
+	for _, id := range gcids {
+		if _, ok := fresh[id]; !ok {
+			gone[id] = true
+		}
+	}
+	c.gcMu.Lock()
+	c.gcNames, c.gcUnnamed = fresh, gone
+	c.gcMu.Unlock()
+	return fresh
 }
 
 func NewClient(endpoint, token string) *Client {

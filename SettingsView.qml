@@ -99,14 +99,14 @@ Column {
   }
   Toggle {
     width: root.width
-    label: "Count private messages"
+    label: "Private messages light the bar"
     checked: root.countPrivate
     hasCursor: root.cursor === 1
     onClicked: root.changed("countPrivate", !root.countPrivate)
   }
   Toggle {
     width: root.width
-    label: "Count group chats"
+    label: "Group chats light the bar"
     description: "A busy group can keep the mark lit; turn this off to let private messages stand out."
     checked: root.countGroupchat
     hasCursor: root.cursor === 2

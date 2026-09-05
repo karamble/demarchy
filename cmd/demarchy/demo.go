@@ -116,9 +116,9 @@ func demoSnapshot() *dcr.Snapshot {
 			// Invented chat, so a published screenshot never carries a real
 			// nick or somebody else's messages.
 			Messages: []dcr.Message{
-				{Type: "gc-message", FromNick: "relay", Text: "[m] <asterix> ticket price ticked up again"},
+				{Type: "gc-message", FromNick: "relay", Text: "[m] <asterix> ticket price ticked up again", GCID: "d1", GCName: "dcr-support"},
 				{Type: "pm", FromNick: "hal", Text: "your ticket voted, nice one"},
-				{Type: "gc-message", FromNick: "relay", Text: "[m] <obelix> pool is holding just under 42k"},
+				{Type: "gc-message", FromNick: "relay", Text: "[m] <obelix> pool is holding just under 42k", GCID: "d1", GCName: "dcr-support"},
 			},
 		},
 		Unread: dcr.Unread{Private: 1, Groupchat: 2, Total: 3},

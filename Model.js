@@ -79,6 +79,13 @@ function isGroup(msg) {
   return !!msg && (msg.type === "gcm" || msg.type === "gc-message")
 }
 
+// groupLabel names the group a message came from. The helper resolves the id to
+// a name; a group it could not resolve still says what kind of message this is.
+function groupLabel(msg) {
+  if (!isGroup(msg)) return ""
+  return "  \u00b7  " + (msg.gcName ? msg.gcName : "group")
+}
+
 // ---- errors
 
 // errorLine turns the helper's machine-readable code into something the panel

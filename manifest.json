@@ -46,14 +46,14 @@
       {
         "key": "countPrivate",
         "type": "boolean",
-        "label": "Count private messages",
+        "label": "Private messages light the bar",
         "description": "Incoming PMs raise the unread count and colour the bar mark.",
         "defaultValue": true
       },
       {
         "key": "countGroupchat",
         "type": "boolean",
-        "label": "Count group chats",
+        "label": "Group chats light the bar",
         "description": "Group messages raise the unread count too. A busy group can keep the mark permanently lit; turn this off to let private messages stand out.",
         "defaultValue": true
       },

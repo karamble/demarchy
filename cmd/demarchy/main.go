@@ -23,7 +23,6 @@ import (
 	"os"
 	"os/signal"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -233,33 +232,53 @@ func validateConnection(ctx context.Context, endpoint, token string) error {
 type counter struct {
 	private int
 	group   int
-	ringLen int
+	tail    string
 	primed  bool
 }
 
-// observe folds a fresh ring read into the counter and reports how many entries
-// were appended since the previous read.
+// tag identifies a ring entry. The ring carries no ids and no timestamps, so
+// the sender, the text and the group are all there is to go on. Two identical
+// lines running together are indistinguishable, which can only ever undercount.
+func tag(m dcr.Message) string {
+	return m.Type + "\x00" + m.FromNick + "\x00" + m.GCID + "\x00" + m.Text
+}
+
+// observe folds a fresh ring read into the counter and credits everything that
+// arrived after the last entry it saw.
 //
-// The ring grows to its cap and then drops from the front, so a length increase
-// gives the exact number appended. Once it is full the length stops moving, and
-// a push we were woken by means at least one entry arrived: hence the floor of
-// one. The first read only primes the baseline: entries already in the ring
-// when the helper starts are history, not unread.
+// This runs on every fetch rather than on a chat push, because dcrpulse does
+// not push the chat ring. Subscribing to it yields nothing: node/sync and
+// wallet/balance are what beat, and those beats are what bring a fresh ring
+// along with them. Counting by content rather than by length is what makes
+// running on every fetch safe. A beat carrying no new messages finds its own
+// tail at the end and credits nothing, which is the failure that once made the
+// badge climb on its own, and a ring that has filled up and started dropping
+// from the front still shows exactly which entries are new.
 func (c *counter) observe(msgs []dcr.Message, countPrivate, countGroup bool) {
 	n := len(msgs)
-	if !c.primed {
-		c.primed, c.ringLen = true, n
+	if n == 0 {
 		return
 	}
-	appended := n - c.ringLen
-	if appended <= 0 {
-		appended = 1
+	if !c.primed {
+		// Whatever is in the ring at startup is history, not unread.
+		c.primed, c.tail = true, tag(msgs[n-1])
+		return
 	}
-	if appended > n {
-		appended = n
+	if c.tail == tag(msgs[n-1]) {
+		return
 	}
-	c.ringLen = n
-	for _, m := range msgs[n-appended:] {
+
+	// Everything after the entry last seen is new. If that entry has dropped
+	// off the front, the whole ring is new to us.
+	fresh := msgs
+	for i := n - 1; i >= 0; i-- {
+		if tag(msgs[i]) == c.tail {
+			fresh = msgs[i+1:]
+			break
+		}
+	}
+	c.tail = tag(msgs[n-1])
+	for _, m := range fresh {
 		switch {
 		case m.IsGroup() && countGroup:
 			c.group++
@@ -279,30 +298,12 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 	var count counter
 	commands := readCommands(ctx)
 
-	// Which resources changed since the last fetch. The unread counter may only
-	// act on a chat-ring push: node/sync alone beats every 20 seconds, and
-	// counting those as messages would make the badge climb on its own.
-	var mu sync.Mutex
-	pending := map[string]bool{}
-
 	refresh := make(chan struct{}, 1)
-	poke := func(uri string) {
-		if uri != "" {
-			mu.Lock()
-			pending[uri] = true
-			mu.Unlock()
-		}
+	poke := func() {
 		select {
 		case refresh <- struct{}{}:
 		default:
 		}
-	}
-	takePending := func() map[string]bool {
-		mu.Lock()
-		defer mu.Unlock()
-		p := pending
-		pending = map[string]bool{}
-		return p
 	}
 
 	// Command handling has to be reachable from two places: the stream loop
@@ -320,9 +321,9 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 		switch cmd.Cmd {
 		case "markRead":
 			count.reset()
-			poke("")
+			poke()
 		case "refresh":
-			poke("")
+			poke()
 		case "quit":
 			return false, true
 		case "switch", "addConnection", "editConnection", "removeConnection":
@@ -354,8 +355,8 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 		go func() {
 			err := sess.client.Listen(streamCtx,
 				subscriptions(sess.opt),
-				func([]string) { poke("") },
-				func(uri string) { poke(uri) },
+				func([]string) { poke() },
+				func(string) { poke() },
 			)
 			if err != nil && streamCtx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "listen:", err)
@@ -383,20 +384,15 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 					break inner
 				}
 			case <-refresh:
-				changed := takePending()
 				callCtx, cancel := context.WithTimeout(streamCtx, 30*time.Second)
 				snap := sess.decorate(dcr.Fetch(callCtx, sess.client, sess.opt))
 				cancel()
 				if snap.Reachable {
 					connected = true
 					backoff = time.Second
-					// Fold the ring in only when the ring is what moved, or
-					// when the baseline has not been taken yet.
-					if changed[dcr.ResBRMessages] || !count.primed {
-						count.observe(snap.BR.Messages,
-							dcr.BoolSetting("countPrivate", true),
-							dcr.BoolSetting("countGroupchat", true))
-					}
+					count.observe(snap.BR.Messages,
+						dcr.BoolSetting("countPrivate", true),
+						dcr.BoolSetting("countGroupchat", true))
 				}
 				snap.Unread = count.unread()
 				emit(snap)

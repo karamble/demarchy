@@ -116,7 +116,7 @@ Column {
 
       Text {
         width: parent.width
-        text: Model.sender(parent.modelData) + (Model.isGroup(parent.modelData) ? "  ·  group" : "")
+        text: Model.sender(parent.modelData) + Model.groupLabel(parent.modelData)
         textFormat: Text.PlainText
         elide: Text.ElideRight
         color: Color.popups.text

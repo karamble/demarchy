@@ -218,6 +218,7 @@ type Message struct {
 	FromNick string `json:"fromNick"`
 	Text     string `json:"text"`
 	GCID     string `json:"gcid,omitempty"`
+	GCName   string `json:"gcName,omitempty"`
 }
 
 // IsGroup reports whether a ring entry is group traffic.
@@ -654,7 +655,32 @@ func fetchBR(ctx context.Context, c *Client, limit int) *BR {
 		}
 	}
 	br.Messages = fetchMessages(ctx, c, limit)
+	nameGroups(ctx, c, br.Messages)
 	return br
+}
+
+// nameGroups fills in the group name for each group message.
+//
+// The ring carries a gcid and nothing else, so without this the panel has
+// nothing to label a row with but the word "group". br_groupchats is a read
+// tool in the domain the messages already need, so this asks for nothing extra
+// of a token, and the client caches the answer.
+func nameGroups(ctx context.Context, c *Client, msgs []Message) {
+	var ids []string
+	for _, m := range msgs {
+		if m.GCID != "" {
+			ids = append(ids, m.GCID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+	names := c.resolveGroups(ctx, ids)
+	for i := range msgs {
+		if n := names[msgs[i].GCID]; n != "" {
+			msgs[i].GCName = n
+		}
+	}
 }
 
 // ringEntry is the wire shape of one chat-ring element.
@@ -667,7 +693,8 @@ type ringEntry struct {
 	} `json:"payload"`
 }
 
-// fetchMessages reads the chat ring, newest last, capped to limit entries.
+// fetchMessages reads the chat ring and returns it oldest first, holding the
+// newest limit entries.
 func fetchMessages(ctx context.Context, c *Client, limit int) []Message {
 	if limit <= 0 {
 		limit = 20
@@ -680,11 +707,25 @@ func fetchMessages(ctx context.Context, c *Client, limit int) []Message {
 	if json.Unmarshal(raw, &entries) != nil {
 		return nil
 	}
+	return ringToMessages(entries, limit)
+}
+
+// ringToMessages caps a ring read to the newest limit entries and turns it the
+// right way round.
+//
+// dcrpulse reverses its ring on read, so the resource hands back newest first.
+// Everything downstream reads the slice as a chat log that grows at the end:
+// the panel shows the last few, and the unread counter remembers the last one
+// it saw and credits whatever follows it. Taking the tail of the raw response
+// keeps the oldest messages and pins that counter to an entry that never moves,
+// which is a stuck badge and a panel full of yesterday.
+func ringToMessages(entries []ringEntry, limit int) []Message {
 	if len(entries) > limit {
-		entries = entries[len(entries)-limit:]
+		entries = entries[:limit]
 	}
 	out := make([]Message, 0, len(entries))
-	for _, e := range entries {
+	for i := len(entries) - 1; i >= 0; i-- {
+		e := entries[i]
 		out = append(out, Message{
 			Type:     e.Type,
 			FromNick: e.Payload.FromNick,
