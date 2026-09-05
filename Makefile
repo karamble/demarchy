@@ -5,6 +5,8 @@ DEST      := $(HOME)/.config/omarchy/plugins/$(PLUGIN_ID)
 
 all: build
 
+# Both binaries together: a connections.json carrying a plain-http exception is
+# written as version 2, and a helper older than the wizard refuses to read it.
 build:
 	go build -trimpath -o bin/demarchy       ./cmd/demarchy
 	go build -trimpath -o bin/demarchy-setup ./cmd/demarchy-setup

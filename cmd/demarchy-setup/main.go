@@ -22,6 +22,8 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -84,16 +86,26 @@ Tokens are stored in %s, mode 0600.
 }
 
 func run(args []string) error {
+	verb := ""
+	if len(args) > 0 {
+		verb = args[0]
+	}
+	// Dispatched before the load so a stored token can always be deleted, even
+	// when the file itself is what is broken.
+	if verb == "purge" {
+		return purge(args[1:])
+	}
+
 	list, err := dcr.LoadConnections()
 	if err != nil {
 		return err
 	}
 
-	verb := ""
-	if len(args) > 0 {
-		verb = args[0]
-	}
 	switch verb {
+	case "allow-http":
+		return allowHTTP(list, args[1:])
+	case "disallow-http":
+		return disallowHTTP(list, args[1:])
 	case "list":
 		return listConnections(list)
 	case "check":
@@ -110,8 +122,6 @@ func run(args []string) error {
 		}
 		fmt.Printf("Removed %q and its token.\n", args[1])
 		return nil
-	case "purge":
-		return purge(args[1:])
 	case "":
 		return addConnection(list)
 	default:
@@ -179,6 +189,10 @@ func purge(args []string) error {
 }
 
 func listConnections(list *dcr.Connections) error {
+	if list.PlainHTTP != nil {
+		printPolicy(list)
+		fmt.Println()
+	}
 	if len(list.Conns) == 0 {
 		fmt.Println("No connections yet. Run demarchy-setup to add one.")
 		return nil
@@ -396,4 +410,151 @@ func stty(arg string) error {
 	cmd := exec.Command("stty", arg)
 	cmd.Stdin = os.Stdin
 	return cmd.Run()
+}
+
+// allowHTTP adds one mesh address to the plain-http exception.
+//
+// The exception is deliberately awkward to set: it is typed here rather than
+// offered in the panel, because it relaxes the one promise this widget makes
+// about a bearer token, and the person changing it should have to say so in a
+// terminal.
+func allowHTTP(list *dcr.Connections, args []string) error {
+	var cidr, iface, note string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--via":
+			if i+1 >= len(args) {
+				return errors.New("--via needs an interface name, for example: --via wt0")
+			}
+			iface, i = args[i+1], i+1
+		case "--note":
+			if i+1 >= len(args) {
+				return errors.New("--note needs some text")
+			}
+			note, i = args[i+1], i+1
+		default:
+			if cidr != "" {
+				return fmt.Errorf("unexpected argument %q", args[i])
+			}
+			cidr = args[i]
+		}
+	}
+	if cidr == "" {
+		return errors.New("usage: demarchy-setup allow-http <cidr> [--via <interface>] [--note <text>]")
+	}
+
+	next := &dcr.PlainHTTP{}
+	if list.PlainHTTP != nil {
+		*next = *list.PlainHTTP
+		next.Networks = append([]string(nil), list.PlainHTTP.Networks...)
+	}
+	if iface != "" {
+		next.Interface = iface
+	}
+	if next.Interface == "" {
+		return errors.New("no mesh interface set yet: give one with --via, for example: --via wt0")
+	}
+	if note != "" {
+		next.Note = note
+	}
+	for _, have := range next.Networks {
+		if have == cidr {
+			return fmt.Errorf("%s is already allowed", cidr)
+		}
+	}
+	next.Networks = append(next.Networks, cidr)
+
+	if err := list.SetPlainHTTP(next); err != nil {
+		return err
+	}
+	if err := dcr.SaveConnections(list); err != nil {
+		return err
+	}
+	printPolicy(list)
+	warnInterface(next.Interface)
+	fmt.Println("a running helper picks this up within a minute, or on the next panel open")
+	return nil
+}
+
+// disallowHTTP removes one address, and names anything it strands.
+func disallowHTTP(list *dcr.Connections, args []string) error {
+	if len(args) < 1 {
+		return errors.New("usage: demarchy-setup disallow-http <cidr>")
+	}
+	if list.PlainHTTP == nil {
+		return errors.New("no plain-http exception is set")
+	}
+	cidr := args[0]
+
+	next := &dcr.PlainHTTP{Interface: list.PlainHTTP.Interface, Note: list.PlainHTTP.Note}
+	found := false
+	for _, have := range list.PlainHTTP.Networks {
+		if have == cidr {
+			found = true
+			continue
+		}
+		next.Networks = append(next.Networks, have)
+	}
+	if !found {
+		return fmt.Errorf("%s is not in the list", cidr)
+	}
+
+	if len(next.Networks) == 0 {
+		// The last range going means the whole object goes, and the file drops
+		// back to version 1.
+		if err := list.SetPlainHTTP(nil); err != nil {
+			return err
+		}
+	} else if err := list.SetPlainHTTP(next); err != nil {
+		return err
+	}
+
+	// Say which connections this strands before it is saved, because a refused
+	// connection shows as REFUSED in the panel with no hint of what changed.
+	stranded := strandedBy(list)
+	if err := dcr.SaveConnections(list); err != nil {
+		return err
+	}
+	printPolicy(list)
+	for _, id := range stranded {
+		fmt.Printf("connection %q is now refused: its endpoint is plain http and no longer allowed\n", id)
+	}
+	return nil
+}
+
+// strandedBy names every stored connection the current policy would refuse.
+func strandedBy(list *dcr.Connections) []string {
+	p := list.Policy()
+	var out []string
+	for _, c := range list.Conns {
+		u, err := url.Parse(c.Endpoint)
+		if err != nil {
+			continue
+		}
+		if p.CheckURL(u) != nil {
+			out = append(out, c.ID)
+		}
+	}
+	return out
+}
+
+func printPolicy(list *dcr.Connections) {
+	p := list.Policy()
+	if !p.Enabled() {
+		fmt.Println("plain http: loopback only")
+		return
+	}
+	fmt.Printf("plain http via %s to: %s\n", p.Interface(), strings.Join(p.Networks(), ", "))
+	if list.PlainHTTP != nil && list.PlainHTTP.Note != "" {
+		fmt.Printf("  note: %s\n", list.PlainHTTP.Note)
+	}
+}
+
+// warnInterface says so when the interface is not there yet, which is normal
+// while a mesh is still being set up and confusing if nothing mentions it.
+func warnInterface(name string) {
+	if _, err := net.InterfaceByName(name); err != nil {
+		fmt.Printf("note: interface %s is not present right now; "+
+			"plain http stays refused until it is up\n", name)
+	}
 }

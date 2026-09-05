@@ -47,6 +47,8 @@ Column {
   property var connections: []
   property string activeConnection: ""
   property var connResult: null
+  property var plainHttp: null
+  property string configError: ""
 
   signal connAdd(string name, string endpoint, string token)
   signal connEdit(string id, string name, string endpoint, string token)
@@ -129,6 +131,8 @@ Column {
     connections: root.connections
     activeId: root.activeConnection
     result: root.connResult
+    plainHttp: root.plainHttp
+    configError: root.configError
     cursorRow: (root.cursor >= root.connFirst && root.cursor < root.addRow)
                ? root.cursor - root.connFirst : -1
     actionIndex: root.actionIndex

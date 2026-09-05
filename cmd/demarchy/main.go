@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -110,6 +111,8 @@ func main() {
 		overrideEndpoint: *endpoint,
 		overrideToken:    *tokenFile,
 	}
+	// Installed before the first client, which reads it on every request.
+	sess.setPolicy(list.Policy())
 	// A connection that fails at startup is reported and then retried, not a
 	// reason to quit. Exiting here left the panel with nothing: the process was
 	// gone before its one line could be read, so a rejected token looked
@@ -143,8 +146,80 @@ type session struct {
 	client *dcr.Client
 	opt    dcr.FetchOptions
 
+	// policy is handed to the client as a function rather than a value, so a
+	// range added or removed on disk takes effect on the requests already in
+	// flight instead of waiting for something to rebuild the client.
+	policy atomic.Pointer[dcr.Policy]
+	// built is what the live client was made from. When the file no longer
+	// agrees with it, the connection is rebuilt.
+	built string
+	// loadErr is the last failure to read connections.json. While it is set the
+	// list in memory is stale, so no write verb may run.
+	loadErr error
+
 	overrideEndpoint string
 	overrideToken    string
+}
+
+// livePolicy is what the client consults per request and per dial.
+func (s *session) livePolicy() dcr.Policy {
+	if p := s.policy.Load(); p != nil {
+		return *p
+	}
+	return dcr.Policy{}
+}
+
+// setPolicy installs a policy, or the default rule when the file is unreadable.
+// A broken file fails closed for exactly the traffic it governs: https and
+// loopback connections carry on working.
+func (s *session) setPolicy(p dcr.Policy) { s.policy.Store(&p) }
+
+// fingerprint is what a rebuild is decided on: the endpoint, the token and the
+// policy in force. Any of the three moving means the live client is wrong.
+func (s *session) fingerprint() string {
+	if s.conn == nil {
+		return ""
+	}
+	p := s.livePolicy()
+	return s.conn.Endpoint + "\x00" + s.conn.Token + "\x00" +
+		p.Interface() + "\x00" + strings.Join(p.Networks(), ",")
+}
+
+// resync re-reads the file and rebuilds the connection when anything it was
+// built from has changed.
+//
+// Three separate failures share this one fix. Connection edits are applied by a
+// one-shot process, so the running helper never saw them. A range removed from
+// the policy left the old client sending plain text anyway. And a range added
+// could never rescue a refused connection, because the switcher declines to
+// switch to the id that is already active, so no gesture in the panel could
+// rebuild it.
+func (s *session) resync(ctx context.Context) bool {
+	fresh, err := dcr.LoadConnections()
+	if err != nil {
+		s.loadErr = err
+		s.setPolicy(dcr.Policy{})
+		return false
+	}
+	s.loadErr = nil
+	s.list = fresh
+	s.setPolicy(fresh.Policy())
+
+	if s.overrideEndpoint != "" || s.conn == nil {
+		return false
+	}
+	if conn, ok := fresh.Find(s.conn.ID); ok {
+		s.conn = conn
+	}
+	if s.fingerprint() == s.built {
+		return false
+	}
+	id := s.conn.ID
+	if err := s.use(ctx, id); err != nil {
+		code, detail := dcr.Classify(err)
+		fmt.Fprintln(os.Stderr, "resync:", code, detail)
+	}
+	return true
 }
 
 // use selects a connection by id and reads its grant. An unknown id falls back
@@ -174,7 +249,8 @@ func (s *session) use(ctx context.Context, id string) error {
 		s.conn, endpoint, token = conn, conn.Endpoint, conn.Token
 	}
 
-	s.client = dcr.NewClient(endpoint, token)
+	s.client = dcr.NewClientWithPolicy(endpoint, token, s.livePolicy)
+	s.built = s.fingerprint()
 
 	// Ask what this token may read, and fetch only that. The grant is the
 	// configuration: a section the token cannot see is a section the panel
@@ -202,20 +278,27 @@ func (s *session) decorate(snap *dcr.Snapshot) *dcr.Snapshot {
 	if s.conn != nil {
 		snap.Active = s.conn.ID
 	}
+	snap.PlainHTTP = s.livePolicy().Public()
+	if s.loadErr != nil {
+		snap.ConfigError = s.loadErr.Error()
+	}
 	return snap
 }
 
 // validateConnection applies the same refusal the setup tool does: a widget may
 // hold a token that can read, and nothing more.
-func validateConnection(ctx context.Context, endpoint, token string) error {
-	ep, err := dcr.NormaliseEndpoint(endpoint)
+func validateConnection(ctx context.Context, endpoint, token string, policy func() dcr.Policy) error {
+	if policy == nil {
+		policy = func() dcr.Policy { return dcr.Policy{} }
+	}
+	ep, err := dcr.NormaliseEndpointWith(endpoint, policy())
 	if err != nil {
 		return err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 
-	caps, err := dcr.NewClient(ep, token).Capabilities(ctx)
+	caps, err := dcr.NewClientWithPolicy(ep, token, policy).Capabilities(ctx)
 	if err != nil {
 		return err
 	}
@@ -312,21 +395,32 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 	// a sleep that ignored commands left the panel pinned to a dead connection
 	// until the backoff happened to expire.
 	handleCommand := func(cmd command) (restart, quit bool) {
-		// The list on disk may have moved under us: connection changes are
-		// applied by a separate one-shot process, so re-read before acting on
-		// anything. It is a small file and this is not a hot path.
-		if fresh, err := dcr.LoadConnections(); err == nil {
-			sess.list = fresh
-		}
+		// The file may have moved under us: connection changes are applied by a
+		// separate one-shot process, and the policy is edited by the wizard. A
+		// rebuilt connection restarts the stream, which is what the caller does
+		// with the restart return.
+		rebuilt := sess.resync(ctx)
 		switch cmd.Cmd {
 		case "markRead":
 			count.reset()
 			poke()
 		case "refresh":
 			poke()
+			if rebuilt {
+				return true, false
+			}
 		case "quit":
 			return false, true
 		case "switch", "addConnection", "editConnection", "removeConnection":
+			if sess.loadErr != nil && cmd.Cmd != "switch" {
+				// Writing now would put the stale list in memory back over
+				// whatever the operator is in the middle of fixing.
+				code, detail := dcr.Classify(sess.loadErr)
+				snap := sess.decorate(&dcr.Snapshot{V: dcr.SchemaVersion})
+				snap.ConnResult = &dcr.ConnResult{Op: cmd.Cmd, Error: code, Detail: detail}
+				emit(snap)
+				return false, false
+			}
 			result := apply(ctx, sess, cmd)
 			// The unread tally means "since you switched here", so a change of
 			// connection starts it again.
@@ -350,6 +444,12 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 
 	backoff := time.Second
 	for ctx.Err() == nil {
+		// Every time round, so a policy or connection change made while the
+		// panel was closed is picked up without a command arriving. This is
+		// also what heals a connection refused for plain text once the range
+		// allowing it is restored: nothing in the panel can rebuild the client
+		// for the connection that is already active.
+		sess.resync(ctx)
 		streamCtx, cancelStream := context.WithCancel(ctx)
 
 		go func() {
@@ -524,7 +624,7 @@ func apply(ctx context.Context, sess *session, cmd command) *dcr.ConnResult {
 		res.ID = sess.conn.ID
 
 	case "addConnection":
-		if err := validateConnection(ctx, cmd.Endpoint, cmd.Token); err != nil {
+		if err := validateConnection(ctx, cmd.Endpoint, cmd.Token, sess.list.Policy); err != nil {
 			return fail(err)
 		}
 		conn, err := sess.list.Add(cmd.Name, cmd.Endpoint, cmd.Token)
@@ -551,7 +651,7 @@ func apply(ctx context.Context, sess *session, cmd command) *dcr.ConnResult {
 		if strings.TrimSpace(endpoint) == "" {
 			endpoint = existing.Endpoint
 		}
-		if err := validateConnection(ctx, endpoint, token); err != nil {
+		if err := validateConnection(ctx, endpoint, token, sess.list.Policy); err != nil {
 			return fail(err)
 		}
 		if _, err := sess.list.Edit(cmd.ID, cmd.Name, cmd.Endpoint, cmd.Token); err != nil {

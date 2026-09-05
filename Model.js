@@ -96,6 +96,9 @@ function errorLine(code, detail) {
   case "no-token":    return "No token yet. Run the setup to connect this widget to dcrpulse."
   case "auth":        return "dcrpulse rejected the token. It may have been revoked."
   case "unreachable": return "dcrpulse is not reachable. Is the stack running?"
+  // The detail carries the address and what to type, which is the whole use of
+  // this one: a generic sentence would leave nothing to act on.
+  case "insecure":    return detail ? String(detail) : "Plain http is not allowed to that address."
   case "":
   case undefined:
   case null:          return ""
@@ -125,6 +128,7 @@ function pill(monitoring, reachable, code) {
   if (code === "no-token") return "NO TOKEN"
   if (code === "auth") return "REJECTED"
   if (code === "unreachable") return "OFFLINE"
+  if (code === "insecure") return "REFUSED"
   if (!reachable) return "CONNECTING"
   return "LIVE"
 }
@@ -213,6 +217,7 @@ function connError(result) {
   switch (result.error) {
   case "auth":        return "That token was rejected by dcrpulse."
   case "unreachable": return "Could not reach that endpoint. Is dcrpulse running there?"
+  case "insecure":    return detail !== "" ? detail : "Plain http is not allowed to that address."
   case "no-token":    return "No token given."
   }
   return detail !== "" ? detail : "That did not work."

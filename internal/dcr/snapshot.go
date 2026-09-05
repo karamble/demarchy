@@ -46,7 +46,13 @@ type Snapshot struct {
 	// The connection list and which one is live, so the panel can draw the
 	// switcher. Tokens are stripped: see Connections.Public.
 	Connections []PublicConnection `json:"connections,omitempty"`
-	Active      string             `json:"activeConnection,omitempty"`
+	// PlainHTTP is the exception in force, so the panel can say plainly that
+	// one exists. Never editable there; the note is not carried.
+	PlainHTTP *PlainHTTPPublic `json:"plainHttp,omitempty"`
+	// ConfigError is set when connections.json cannot be read, which the panel
+	// shows instead of pretending the list is empty.
+	ConfigError string `json:"configError,omitempty"`
+	Active      string `json:"activeConnection,omitempty"`
 	// ConnResult reports the outcome of the last add/edit/remove, so a refused
 	// token shows a reason instead of the form silently doing nothing.
 	ConnResult *ConnResult `json:"connResult,omitempty"`
@@ -256,7 +262,13 @@ func (o FetchOptions) allows(domain string) bool {
 }
 
 // Classify turns a transport or protocol failure into a stable code the panel
-// can branch on, plus a human detail. Codes: no-token, auth, unreachable, error.
+// can branch on, plus a human detail. Codes: no-token, auth, insecure,
+// unreachable, error.
+//
+// The identity checks come first on purpose. These errors carry text a
+// substring rule would misread: a refusal naming an endpoint contains "dial",
+// and a config error can quote a value containing "EOF", either of which would
+// otherwise be reported to the panel as "unreachable".
 func Classify(err error) (string, string) {
 	switch {
 	case err == nil:
@@ -265,6 +277,12 @@ func Classify(err error) (string, string) {
 		return "no-token", "no token configured; run demarchy-setup"
 	case errors.Is(err, ErrUnauthorized):
 		return "auth", "dcrpulse rejected the token"
+	case errors.Is(err, ErrPlaintextRefused):
+		return "insecure", err.Error()
+	case errors.Is(err, ErrMeshDown):
+		return "unreachable", err.Error()
+	case errors.Is(err, ErrConfig):
+		return "error", err.Error()
 	}
 	var nerr net.Error
 	if errors.As(err, &nerr) {

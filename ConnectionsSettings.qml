@@ -21,6 +21,10 @@ Column {
   property var connections: []
   property string activeId: ""
   property var result: null          // the helper's answer to the last command
+  // The plain-http exception in force, and the reason the config could not be
+  // read. Stated here, never editable here: it is set from a terminal.
+  property var plainHttp: null
+  property string configError: ""
   property bool busy: false
 
   // Keyboard cursor, driven by the panel. cursorRow is an index into
@@ -272,9 +276,12 @@ Column {
     Text {
       width: parent.width
       wrapMode: Text.WordWrap
-      // Say the rule before it is broken, rather than only in the refusal.
-      text: "Anything but localhost must be https: the token is sent on every "
-            + "request, and plain http would put it on the wire in clear text."
+      // Says the rule before it is broken rather than only in the refusal, and
+      // stays true whether or not a mesh exception is set: off this machine is
+      // still the wrong place for a token in clear text, and the exception is
+      // about a tunnel rather than about the internet.
+      text: "Off this machine, use https: the token is sent on every request, "
+            + "and plain http would put it on the wire in clear text."
       textFormat: Text.PlainText
       color: Color.popups.text
       opacity: 0.4
@@ -306,6 +313,30 @@ Column {
         onClicked: root.cancel()
       }
     }
+  }
+
+  // ---- the expert exception, stated but not offered
+  //
+  // A relaxation nobody can see is a relaxation nobody reviews, so the panel
+  // says what is in force. There is no control here and no keyboard row: it is
+  // changed from a terminal, which is the point.
+  Text {
+    width: root.width
+    visible: !!root.plainHttp || root.configError !== ""
+    wrapMode: Text.WordWrap
+    text: {
+      if (root.configError !== "") return root.configError
+      if (!root.plainHttp) return ""
+      var nets = (root.plainHttp.networks || []).join(", ")
+      return "Plain http is allowed via " + root.plainHttp["interface"] + " to "
+             + nets + " (expert setting in connections.json; change it with "
+             + "demarchy-setup allow-http)."
+    }
+    textFormat: Text.PlainText
+    color: root.configError !== "" ? Color.urgent : Color.popups.text
+    opacity: root.configError !== "" ? 0.9 : 0.45
+    font.family: Style.font.family
+    font.pixelSize: Style.font.caption
   }
 
   // ---- what the helper said

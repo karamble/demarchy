@@ -11,7 +11,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,6 +44,11 @@ type Client struct {
 	token    string
 	hc       *http.Client
 	nextID   atomic.Int64
+
+	// policy is read per request and per dial rather than resolved once, so a
+	// range the operator removes stops being reachable without the helper
+	// having to rebuild anything, and one they add takes effect the same way.
+	policy func() Policy
 
 	// Group chat names, keyed by gcid. Cached here rather than fetched per
 	// snapshot: the list is large, it changes about never, and it belongs to
@@ -105,16 +113,122 @@ func (c *Client) resolveGroups(ctx context.Context, gcids []string) map[string]s
 }
 
 func NewClient(endpoint, token string) *Client {
+	return NewClientWithPolicy(endpoint, token, nil)
+}
+
+// NewClientWithPolicy builds a client whose plain-http behaviour follows a
+// policy that may change under it.
+func NewClientWithPolicy(endpoint, token string, policy func() Policy) *Client {
 	if endpoint == "" {
 		endpoint = DefaultEndpoint
 	}
-	return &Client{
+	if policy == nil {
+		policy = func() Policy { return Policy{} }
+	}
+	c := &Client{
 		Endpoint: strings.TrimRight(endpoint, "/"),
 		token:    token,
+		policy:   policy,
+	}
+
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	// Plain http means the bytes must not leave this machine or the tunnel, and
+	// a proxy is never the right way to carry them. Go's own rules exempt only
+	// "localhost" and loopback literals, so "http://foo.localhost:8090" would
+	// otherwise go through HTTP_PROXY with the token attached.
+	tr.Proxy = func(req *http.Request) (*url.URL, error) {
+		if req.URL != nil && req.URL.Scheme == "http" {
+			return nil, nil
+		}
+		return http.ProxyFromEnvironment(req)
+	}
+	tr.DialContext = c.dial
+	c.hc = &http.Client{
+		Transport: tr,
+		// dcrpulse answers /mcp directly and never redirects, so following one
+		// can only take the token somewhere it was not checked for. The stdlib
+		// keeps the Authorization header across a same-host https to http
+		// downgrade, which is exactly the case worth refusing.
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 		// No global timeout: the same client serves both short calls and the
 		// long-lived listen stream. Per-call deadlines come from the context.
-		hc: &http.Client{},
 	}
+	return c
+}
+
+// dial is where the plain-http exception is actually enforced.
+//
+// Checking the address is only half of it. With the mesh down, a permitted
+// address is routed out of whatever interface is left, so the socket is pinned
+// to the named device and the connection fails rather than reaching a stranger.
+// The address the transport finally connected to is checked afterwards, because
+// a name resolves outside this function.
+func (c *Client) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	scheme := "http"
+	if strings.HasPrefix(c.Endpoint, "https://") {
+		scheme = "https"
+	}
+	var d net.Dialer
+	if scheme == "https" {
+		return d.DialContext(ctx, network, address)
+	}
+
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	addr, addrErr := netip.ParseAddr(host)
+	local := addrErr == nil && addr.IsLoopback()
+
+	p := c.policy()
+	if !local {
+		if addrErr != nil || !p.Covers(addr) {
+			return nil, fmt.Errorf("%w: %s", ErrPlaintextRefused, p.Refusal(host))
+		}
+		if err := meshUp(p.Interface()); err != nil {
+			return nil, err
+		}
+		d.Control = bindToDevice(p.Interface())
+	}
+
+	conn, err := d.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, err
+	}
+	// What was dialled is not always what was asked for; this is the last point
+	// at which the truth is available.
+	ap, err := netip.ParseAddrPort(conn.RemoteAddr().String())
+	if err != nil || !(ap.Addr().IsLoopback() || p.Covers(ap.Addr())) {
+		conn.Close()
+		return nil, fmt.Errorf("%w: %s answered from %s", ErrPlaintextRefused,
+			host, conn.RemoteAddr())
+	}
+	return conn, nil
+}
+
+// meshUp reports whether the interface an exception names is there to carry it.
+func meshUp(name string) error {
+	iface, err := net.InterfaceByName(name)
+	if err != nil {
+		return fmt.Errorf("%w: no interface %s; is the mesh up?", ErrMeshDown, name)
+	}
+	if iface.Flags&net.FlagUp == 0 {
+		return fmt.Errorf("%w: %s is down", ErrMeshDown, name)
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrMeshDown, name, err)
+	}
+	for _, a := range addrs {
+		if n, ok := a.(*net.IPNet); ok {
+			if ip, ok := netip.AddrFromSlice(n.IP); ok && cgnat.Contains(ip.Unmap()) {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("%w: %s has no %s address; is the mesh up?", ErrMeshDown, name, cgnat)
 }
 
 type rpcError struct {
@@ -146,6 +260,12 @@ func (c *Client) post(ctx context.Context, method string, params any) (*http.Res
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.Endpoint+"/mcp", bytes.NewReader(buf))
 	if err != nil {
+		return nil, err
+	}
+	// Before the credential is attached, and against the URL actually being
+	// sent, so an endpoint stored while a range was allowed is refused once it
+	// is not.
+	if err := c.policy().CheckURL(req.URL); err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)

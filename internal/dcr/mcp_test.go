@@ -5,8 +5,13 @@
 package dcr
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -114,5 +119,56 @@ func TestClassifyCodes(t *testing.T) {
 		if got, _ := Classify(tc.err); got != tc.want {
 			t.Errorf("Classify(%v) = %q, want %q", tc.err, got, tc.want)
 		}
+	}
+}
+
+// The credential must not be attached to a request the policy would refuse,
+// and refusing must cost no I/O at all: the check runs before the header and
+// before the dial.
+func TestNoTokenOnARefusedRequest(t *testing.T) {
+	var sawAuth, sawAny int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&sawAny, 1)
+		if r.Header.Get("Authorization") != "" {
+			atomic.AddInt32(&sawAuth, 1)
+		}
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	defer srv.Close()
+
+	// A mesh address with no policy: refused, and the listener never hears it.
+	c := NewClientWithPolicy("http://100.83.12.7:8090", "mcp_secret", nil)
+	if _, err := c.Call(context.Background(), "node_status", nil); err == nil {
+		t.Fatal("a plain-http call to an unlisted address should be refused")
+	} else if !errors.Is(err, ErrPlaintextRefused) {
+		t.Fatalf("want ErrPlaintextRefused, got %v", err)
+	}
+	if atomic.LoadInt32(&sawAny) != 0 || atomic.LoadInt32(&sawAuth) != 0 {
+		t.Fatal("a refused request must not reach the network")
+	}
+}
+
+// dcrpulse never redirects, so a 3xx can only be an attempt to move the token.
+// The stdlib keeps the Authorization header across a same-host https to http
+// downgrade, which is exactly the hop worth refusing.
+func TestRedirectsAreNotFollowed(t *testing.T) {
+	var landed int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&landed, 1)
+		w.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	}))
+	defer target.Close()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/mcp", http.StatusFound)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "mcp_secret")
+	if _, err := c.Call(context.Background(), "node_status", nil); err == nil {
+		t.Fatal("a redirect should surface as a failure, not be chased")
+	}
+	if atomic.LoadInt32(&landed) != 0 {
+		t.Fatal("the redirect was followed; the token went to the second host")
 	}
 }

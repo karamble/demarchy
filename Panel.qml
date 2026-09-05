@@ -73,6 +73,11 @@ Panel {
     return ""
   }
   readonly property var connResult: (snap && snap.connResult) ? snap.connResult : null
+  // The plain-http exception, if one is set, and the reason connections.json
+  // could not be read, if it could not. Both are read-only here: this is an
+  // expert setting and the panel states it rather than offering to change it.
+  readonly property var plainHttp: (snap && snap.plainHttp) ? snap.plainHttp : null
+  readonly property string configError: (snap && snap.configError) ? snap.configError : ""
 
   // The settings rows grow and shrink with the connection list, so a cursor
   // parked at the bottom has to come back inside when one goes away.
@@ -743,6 +748,8 @@ Panel {
           connections: root.connections
           activeConnection: root.activeConnection
           connResult: root.applyResult ? root.applyResult : root.connResult
+          plainHttp: root.plainHttp
+          configError: root.configError
           onConnAdd: function (name, endpoint, token) {
             root.applyConnection({ cmd: "addConnection", name: name, endpoint: endpoint, token: token })
           }

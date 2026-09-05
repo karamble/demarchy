@@ -52,6 +52,10 @@ func demoSnapshot() *dcr.Snapshot {
 		Reachable: true,
 		Domains:   []string{"node", "staking", "bisonrelay", "wallet", "lightning", "treasury", "dex"},
 		// Two connections so the footer switcher has something to show.
+		PlainHTTP: &dcr.PlainHTTPPublic{
+			Interface: "wt0",
+			Networks:  []string{"100.83.12.7/32"},
+		},
 		Connections: []dcr.PublicConnection{
 			{ID: "home", Name: "home", Endpoint: "http://127.0.0.1:8090"},
 			{ID: "vps", Name: "vps", Endpoint: "https://pulse.example:8090"},

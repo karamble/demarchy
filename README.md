@@ -58,6 +58,21 @@ They live in `~/.config/demarchy/connections.json` at mode 0600.
 **Anything that isn't localhost has to be https**, since the token rides along on
 every request. Type a bare remote host and it gets https automatically.
 
+There is one exception, for a WireGuard mesh, where the tunnel already provides
+what https would. It is off unless you turn it on, it lives in the config file
+rather than the settings page, and it is narrow on purpose:
+
+```bash
+demarchy-setup allow-http 100.83.12.7/32 --via wt0
+demarchy-setup disallow-http 100.83.12.7/32
+```
+
+Only carrier-grade NAT addresses, `100.64.0.0/10`, which is what mesh software
+hands out and what ordinary home and cafe networks never do. Only numeric
+addresses, never names, because a name can resolve somewhere else between typing
+it and dialling it. And the traffic is pinned to the interface you name, so with
+the tunnel down nothing is sent at all rather than sent to whoever answers.
+
 ## The token
 
 Each connection carries its own MCP token. In the dcrpulse dashboard, under

@@ -5,11 +5,11 @@
 package dcr
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -27,6 +27,11 @@ const ConnectionsFile = "connections.json"
 
 // connSchema is bumped only if the file shape changes incompatibly.
 const connSchema = 1
+
+// connSchemaPlainHTTP is the version a file carrying a plain-http exception is
+// written as. An older binary refuses it by version rather than reading around
+// the field it does not know and dropping it on the next save.
+const connSchemaPlainHTTP = 2
 
 // Connection is one dcrpulse this widget can talk to. Token is present on disk and in
 // memory in the helper; it is never emitted in a snapshot and never read by
@@ -48,8 +53,39 @@ type PublicConnection struct {
 
 // Connections is the whole file.
 type Connections struct {
-	Version int          `json:"version"`
-	Conns   []Connection `json:"connections"`
+	Version int `json:"version"`
+	// PlainHTTP is the expert exception to the https rule, absent unless the
+	// operator has set one. Its presence is what makes the file version 2, so
+	// a file nobody opted into marshals exactly as it did before this existed.
+	PlainHTTP *PlainHTTP   `json:"plainHttp,omitempty"`
+	Conns     []Connection `json:"connections"`
+}
+
+// Policy returns the parsed exception. The file is validated at load, so this
+// cannot fail in practice; a failure yields the default rule, where only
+// loopback may be reached over plain http.
+func (l *Connections) Policy() Policy {
+	if l == nil {
+		return Policy{}
+	}
+	p, err := ParsePolicy(l.PlainHTTP)
+	if err != nil {
+		return Policy{}
+	}
+	return p
+}
+
+// SetPlainHTTP validates and installs the exception, or clears it when nil.
+func (l *Connections) SetPlainHTTP(in *PlainHTTP) error {
+	if in == nil {
+		l.PlainHTTP = nil
+		return nil
+	}
+	if _, err := ParsePolicy(in); err != nil {
+		return err
+	}
+	l.PlainHTTP = in
+	return nil
 }
 
 var (
@@ -117,18 +153,37 @@ func readConnections() (*Connections, error) {
 		return nil, err
 	}
 	var list Connections
-	if err := json.Unmarshal(b, &list); err != nil {
-		return nil, fmt.Errorf("%s: %w", ConnectionsPath(), err)
+	// Unknown fields are refused rather than dropped: this file is hand-edited
+	// by whoever sets the exception, and a silently ignored typo would read as
+	// a setting that took effect.
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&list); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, ConnectionsPath(), err)
 	}
-	if list.Version != connSchema {
-		return nil, fmt.Errorf("%s: unknown version %d", ConnectionsPath(), list.Version)
+	if list.Version != connSchema && list.Version != connSchemaPlainHTTP {
+		return nil, fmt.Errorf("%w: %s: unknown version %d", ErrConfig, ConnectionsPath(), list.Version)
+	}
+	if _, err := ParsePolicy(list.PlainHTTP); err != nil {
+		return nil, fmt.Errorf("%w: %s: %v", ErrConfig, ConnectionsPath(), err)
 	}
 	return &list, nil
 }
 
 // SaveConnections writes the list atomically, 0600 inside a 0700 directory.
+//
+// The version tracks the exception rather than the code: a file without one
+// stays version 1 and is byte-identical to what an older build wrote, and a
+// file with one is version 2, which an older build refuses loudly instead of
+// unmarshalling around the field and erasing it on its next save.
 func SaveConnections(list *Connections) error {
+	if _, err := ParsePolicy(list.PlainHTTP); err != nil {
+		return fmt.Errorf("%w: %v", ErrConfig, err)
+	}
 	list.Version = connSchema
+	if list.PlainHTTP != nil {
+		list.Version = connSchemaPlainHTTP
+	}
 	b, err := json.MarshalIndent(list, "", "  ")
 	if err != nil {
 		return err
@@ -226,90 +281,38 @@ func (l *Connections) slug(name string) string {
 	}
 }
 
-// NormaliseEndpoint accepts what a person would actually type,
-// "10.8.0.4:8090", "localhost:8090", a bare host, and returns a URL.
+// NormaliseEndpoint settles the scheme and returns the canonical form.
 //
-// **Plain HTTP is refused for anything but loopback.** The bearer token rides in
-// an Authorization header on every call, so http:// to a remote host puts a
-// credential that can read your wallet on the wire in clear text. A bare remote
-// host is therefore promoted to https rather than http; a bare loopback host
-// stays http, because there is no wire to sniff and dcrpulse publishes its MCP
-// port without TLS.
+// Loopback may be reached over plain http, because nothing leaves the machine.
+// A bare remote host is promoted to https rather than defaulting into clear
+// text, and an explicit plain-http remote is refused: the bearer token rides on
+// every request.
 func NormaliseEndpoint(in string) (string, error) {
-	s := strings.TrimSpace(in)
-	if s == "" {
-		return "", errors.New("endpoint is empty")
-	}
+	return NormaliseEndpointWith(in, Policy{})
+}
 
-	explicit := strings.Contains(s, "://")
-	if !explicit {
-		// Decide the scheme from the host, once we can see it.
-		s = "http://" + s
+// NormaliseEndpointWith is NormaliseEndpoint against a configured exception.
+//
+// A bare host is still promoted to https even when the policy would cover it:
+// the exception is something to ask for, not to fall into, so plain text has to
+// be typed.
+func NormaliseEndpointWith(in string, p Policy) (string, error) {
+	ep, err := parseEndpoint(in)
+	if err != nil {
+		return "", err
 	}
-	scheme := ""
 	switch {
-	case strings.HasPrefix(s, "http://"):
-		scheme = "http://"
-	case strings.HasPrefix(s, "https://"):
-		scheme = "https://"
-	default:
-		return "", fmt.Errorf("endpoint must be http or https, got %q", in)
-	}
-	// The scheme is settled before any trimming. Stripping trailing slashes
-	// first turns a bare "http://" into "http:", which then looks like it has
-	// no scheme and gets another one prepended.
-	hostPath := strings.TrimRight(strings.TrimPrefix(s, scheme), "/")
-	if hostPath == "" {
-		return "", fmt.Errorf("endpoint has no host: %q", in)
-	}
-
-	local := IsLoopback(hostPath)
-	switch {
-	case local:
+	case ep.loopback():
 		// Loopback keeps whatever was asked for; http is the normal case.
-	case !explicit:
+	case !ep.explicit:
 		// A bare remote host defaults to TLS rather than to plain text.
-		scheme = "https://"
-	case scheme == "http://":
-		return "", fmt.Errorf(
-			"refusing plain http to %s: the bearer token would cross the network "+
-				"in clear text. Use https, or reach it through an SSH tunnel or VPN "+
-				"so the endpoint is localhost", hostOf(hostPath))
+		ep.scheme = "https"
+	case ep.scheme == "http" && ep.addr.IsValid() && p.Covers(ep.addr):
+		// A listed mesh address, reached over a bound interface.
+	case ep.scheme == "http":
+		return "", fmt.Errorf("%w: %s", ErrPlaintextRefused, p.Refusal(ep.hostname()))
 	}
-	return scheme + hostPath, nil
-}
-
-// hostOf drops the port and any path, for error messages.
-func hostOf(hostPath string) string {
-	h := hostPath
-	if i := strings.IndexByte(h, '/'); i >= 0 {
-		h = h[:i]
-	}
-	return h
-}
-
-// IsLoopback reports whether a host[:port] names this machine. Only loopback
-// may be reached over plain http, so this decides whether a token is allowed
-// to travel unencrypted.
-func IsLoopback(hostPath string) bool {
-	h := hostOf(hostPath)
-	// Strip the port, taking care with bracketed IPv6 literals.
-	if strings.HasPrefix(h, "[") {
-		if i := strings.Index(h, "]"); i >= 0 {
-			h = h[1:i]
-		}
-	} else if i := strings.LastIndexByte(h, ':'); i >= 0 && strings.Count(h, ":") == 1 {
-		h = h[:i]
-	}
-	h = strings.ToLower(strings.TrimSpace(h))
-
-	if h == "localhost" || strings.HasSuffix(h, ".localhost") {
-		return true
-	}
-	if ip := net.ParseIP(h); ip != nil {
-		return ip.IsLoopback()
-	}
-	return false
+	return ep.String(), nil
 }
 
 // Add appends a connection. The caller validates the token first; this only
@@ -319,7 +322,7 @@ func (l *Connections) Add(name, endpoint, token string) (*Connection, error) {
 	if name == "" {
 		return nil, errors.New("name is empty")
 	}
-	ep, err := NormaliseEndpoint(endpoint)
+	ep, err := NormaliseEndpointWith(endpoint, l.Policy())
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +345,7 @@ func (l *Connections) Edit(id, name, endpoint, token string) (*Connection, error
 		n.Name = s
 	}
 	if s := strings.TrimSpace(endpoint); s != "" {
-		ep, err := NormaliseEndpoint(s)
+		ep, err := NormaliseEndpointWith(s, l.Policy())
 		if err != nil {
 			return nil, err
 		}
