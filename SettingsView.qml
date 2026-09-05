@@ -27,7 +27,20 @@ Column {
   // Keyboard cursor. -1 means the panel is being driven by shortcuts or the
   // mouse and nothing is focused.
   property int cursor: -1
-  readonly property int rowCount: 5
+
+  // Rows in cursor order: the four toggles, one per connection, Add
+  // connection, then the terminal button. The list grows and shrinks, so the
+  // last two are derived rather than numbered.
+  readonly property int connFirst: 4
+  readonly property int addRow: root.connFirst + root.connections.length
+  readonly property int setupRow: root.addRow + 1
+  readonly property int rowCount: root.setupRow + 1
+
+  // Which of a connection row's buttons is under the cursor.
+  property int actionIndex: 0
+  onCursorChanged: root.actionIndex = 0
+
+  readonly property bool formFocused: connectionsSettings.formFocused
 
   // The connection list is rendered here but owned by the panel, which is what
   // talks to the helper. These forward straight through.
@@ -45,17 +58,31 @@ Column {
 
   signal changed(string key, bool value)
   signal runSetup()
+  signal focusReleased()
 
   // activateRow keeps the mapping from cursor index to action in one place, so
   // the key handler upstream does not have to know the row order.
   function activateRow(index) {
+    if (index >= root.connFirst && index < root.addRow) {
+      connectionsSettings.runAction(index - root.connFirst, root.actionIndex)
+      return
+    }
     switch (index) {
     case 0: root.changed("monitoring", !root.monitoring); break
     case 1: root.changed("countPrivate", !root.countPrivate); break
     case 2: root.changed("countGroupchat", !root.countGroupchat); break
     case 3: root.changed("showBalances", !root.showBalances); break
-    case 4: root.runSetup(); break
+    case root.addRow: connectionsSettings.beginAdd(); break
+    case root.setupRow: root.runSetup(); break
     }
+  }
+
+  // Left and right walk the buttons on a connection row. Every other row
+  // carries a single action, so they do nothing there.
+  function moveAction(dx) {
+    var n = connectionsSettings.actionCount(root.cursor - root.connFirst)
+    if (n <= 0) return
+    root.actionIndex = (root.actionIndex + dx + n) % n
   }
 
   spacing: Style.space(6)
@@ -102,6 +129,11 @@ Column {
     connections: root.connections
     activeId: root.activeConnection
     result: root.connResult
+    cursorRow: (root.cursor >= root.connFirst && root.cursor < root.addRow)
+               ? root.cursor - root.connFirst : -1
+    actionIndex: root.actionIndex
+    addHasCursor: root.cursor === root.addRow
+    onFocusReleased: root.focusReleased()
     onAddRequested: function (name, endpoint, token) { root.connAdd(name, endpoint, token) }
     onEditRequested: function (id, name, endpoint, token) { root.connEdit(id, name, endpoint, token) }
     onRemoveRequested: function (id, name) { root.connRemove(id, name) }
@@ -131,7 +163,7 @@ Column {
   Button {
     text: "Open setup in a terminal"
     bordered: true
-    hasCursor: root.cursor === 4
+    hasCursor: root.cursor === root.setupRow
     foreground: Color.popups.text
     onClicked: root.runSetup()
   }

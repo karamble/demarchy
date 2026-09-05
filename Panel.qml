@@ -74,6 +74,13 @@ Panel {
   }
   readonly property var connResult: (snap && snap.connResult) ? snap.connResult : null
 
+  // The settings rows grow and shrink with the connection list, so a cursor
+  // parked at the bottom has to come back inside when one goes away.
+  onConnectionsChanged: {
+    if (root.settingsOpen && root.cursor >= settingsView.rowCount)
+      root.cursor = settingsView.rowCount - 1
+  }
+
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string helperPath: pluginDir + "/bin/demarchy"
 
@@ -432,6 +439,9 @@ Panel {
     PanelKeyCatcher {
       id: keyCatcher
       anchors.fill: parent
+      // A focused form field owns every key, so typing a name or a token does
+      // not trip the panel's letter shortcuts.
+      blocked: root.settingsOpen && settingsView.formFocused
       onCloseRequested: {
         if (root.pendingRemove) root.pendingRemove = null
         else root.close()
@@ -464,10 +474,14 @@ Panel {
         }
       }
       onMoveRequested: function (dx, dy) {
-        if (!root.settingsOpen || dy === 0) return
-        var n = settingsView.rowCount
-        root.cursor = root.cursor < 0 ? (dy > 0 ? 0 : n - 1)
-                                      : (root.cursor + dy + n) % n
+        if (!root.settingsOpen) return
+        if (dy !== 0) {
+          var n = settingsView.rowCount
+          root.cursor = root.cursor < 0 ? (dy > 0 ? 0 : n - 1)
+                                        : (root.cursor + dy + n) % n
+          return
+        }
+        if (dx !== 0) settingsView.moveAction(dx)
       }
       onActivateRequested: {
         if (root.pendingRemove) { root.confirmRemove(); return }
@@ -736,6 +750,7 @@ Panel {
             root.applyConnection({ cmd: "editConnection", id: id, name: name, endpoint: endpoint, token: token })
           }
           onConnRemove: function (id, name) { root.askRemove(id, name) }
+          onFocusReleased: keyCatcher.forceActiveFocus()
           onConnSwitch: function (id) { root.switchConnection(id) }
           onChanged: function (key, value) {
             if (key === "monitoring") root.setMonitoring(value)
@@ -814,7 +829,7 @@ Panel {
             anchors.verticalCenter: parent.verticalCenter
             horizontalAlignment: Text.AlignRight
             text: root.settingsOpen
-                  ? "↑↓ move · enter toggle · s back · esc close"
+                  ? "↑↓ row · ←→ action · enter do · s back · esc close"
                   : "n connection · s settings · m monitor" +
                     (root.showBalances && root.reachable ? " · b reveal" : "") +
                     " · r refresh"

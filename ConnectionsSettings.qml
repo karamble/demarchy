@@ -23,6 +23,21 @@ Column {
   property var result: null          // the helper's answer to the last command
   property bool busy: false
 
+  // Keyboard cursor, driven by the panel. cursorRow is an index into
+  // connections, or -1 when the cursor is elsewhere; actionIndex picks one of
+  // that row's buttons.
+  property int cursorRow: -1
+  property int actionIndex: 0
+  property bool addHasCursor: false
+
+  // While a field holds focus the panel hands it every key, so typing a token
+  // does not trip the panel's letter shortcuts.
+  readonly property bool formFocused: nameField.activeFocus
+                                      || endpointField.activeFocus
+                                      || tokenField.activeFocus
+                                      || saveButton.activeFocus
+                                      || cancelButton.activeFocus
+
   // "" when the list is showing, "new" while adding, else the id being edited.
   property string editing: ""
 
@@ -32,6 +47,9 @@ Column {
   // needs a surface it can fill, which a Column cannot give it.
   signal removeRequested(string id, string name)
   signal switchRequested(string id)
+  // Raised when the form lets go of the keyboard, so the panel can take it
+  // back and the row cursor works again.
+  signal focusReleased()
 
   spacing: Style.space(6)
 
@@ -54,6 +72,39 @@ Column {
   function cancel() {
     root.editing = ""
     tokenField.text = ""
+    root.focusReleased()
+  }
+
+  // A row's buttons are conditional, so the keyboard has to walk the same set
+  // the mouse sees: no Use on the connection already in use, and no Remove
+  // when it is the only one left.
+  function actionsFor(conn) {
+    var acts = []
+    if (conn && conn.id !== root.activeId) acts.push("use")
+    acts.push("edit")
+    if (root.connections.length > 1) acts.push("remove")
+    return acts
+  }
+
+  function actionCount(rowIndex) {
+    if (rowIndex < 0 || rowIndex >= root.connections.length) return 0
+    return root.actionsFor(root.connections[rowIndex]).length
+  }
+
+  function actionAt(rowIndex, index) {
+    var n = root.actionCount(rowIndex)
+    if (n === 0) return ""
+    return root.actionsFor(root.connections[rowIndex])[Math.max(0, Math.min(index, n - 1))]
+  }
+
+  function runAction(rowIndex, index) {
+    var conn = root.connections[rowIndex]
+    if (!conn) return
+    switch (root.actionAt(rowIndex, index)) {
+    case "use": root.switchRequested(conn.id); break
+    case "edit": root.beginEdit(conn); break
+    case "remove": root.removeRequested(conn.id, conn.name); break
+    }
   }
 
   function submit() {
@@ -75,16 +126,20 @@ Column {
     delegate: Item {
       id: connRow
       required property var modelData
+      required property int index
       width: root.width
       implicitHeight: Style.space(30)
 
       readonly property bool isActive: connRow.modelData.id === root.activeId
+      readonly property bool hasCursor: connRow.index === root.cursorRow
+      readonly property string cursorAction: connRow.hasCursor
+                                             ? root.actionAt(connRow.index, root.actionIndex) : ""
 
       Rectangle {
         anchors.fill: parent
         anchors.margins: Style.space(1)
         radius: Style.cornerRadius
-        color: rowHover.hovered
+        color: rowHover.hovered || connRow.hasCursor
                ? Style.hoverFillFor(Color.popups.text, Color.accent) : "transparent"
       }
       HoverHandler { id: rowHover }
@@ -129,6 +184,7 @@ Column {
           text: "Use"
           visible: !connRow.isActive
           focusable: true
+          hasCursor: connRow.cursorAction === "use"
           fontSize: Style.font.caption
           foreground: Color.popups.text
           onClicked: root.switchRequested(connRow.modelData.id)
@@ -136,6 +192,7 @@ Column {
         Button {
           text: "Edit"
           focusable: true
+          hasCursor: connRow.cursorAction === "edit"
           fontSize: Style.font.caption
           foreground: Color.popups.text
           onClicked: root.beginEdit(connRow.modelData)
@@ -146,6 +203,7 @@ Column {
           // to talk to and no way back except the terminal.
           visible: root.connections.length > 1
           focusable: true
+          hasCursor: connRow.cursorAction === "remove"
           fontSize: Style.font.caption
           foreground: Color.urgent
           onClicked: root.removeRequested(connRow.modelData.id, connRow.modelData.name)
@@ -159,6 +217,7 @@ Column {
     text: "+ Add connection"
     bordered: true
     focusable: true
+    hasCursor: root.addHasCursor
     foreground: Color.popups.text
     onClicked: root.beginAdd()
   }
@@ -182,12 +241,20 @@ Column {
       width: parent.width
       placeholderText: "name, e.g. home or vps"
       foreground: Color.popups.text
+      KeyNavigation.tab: endpointField
+      KeyNavigation.backtab: cancelButton
+      Keys.onEscapePressed: root.cancel()
+      onAccepted: root.submit()
     }
     TextField {
       id: endpointField
       width: parent.width
       placeholderText: "127.0.0.1:8090"
       foreground: Color.popups.text
+      KeyNavigation.tab: tokenField
+      KeyNavigation.backtab: nameField
+      Keys.onEscapePressed: root.cancel()
+      onAccepted: root.submit()
     }
     TextField {
       id: tokenField
@@ -196,6 +263,10 @@ Column {
       placeholderText: root.editing === "new"
                        ? "MCP bearer token" : "token, leave blank to keep"
       foreground: Color.popups.text
+      KeyNavigation.tab: saveButton
+      KeyNavigation.backtab: endpointField
+      Keys.onEscapePressed: root.cancel()
+      onAccepted: root.submit()
     }
 
     Text {
@@ -214,16 +285,24 @@ Column {
     Row {
       spacing: Style.space(6)
       Button {
+        id: saveButton
         text: root.busy ? "Checking…" : "Verify and save"
         bordered: true
         focusable: true
         foreground: Color.accent
+        KeyNavigation.tab: cancelButton
+        KeyNavigation.backtab: tokenField
+        Keys.onEscapePressed: root.cancel()
         onClicked: root.submit()
       }
       Button {
+        id: cancelButton
         text: "Cancel"
         focusable: true
         foreground: Color.popups.text
+        KeyNavigation.tab: nameField
+        KeyNavigation.backtab: saveButton
+        Keys.onEscapePressed: root.cancel()
         onClicked: root.cancel()
       }
     }
