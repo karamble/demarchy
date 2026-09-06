@@ -52,6 +52,8 @@ var sections = []section{
 	{"lightning", "channel inbound/outbound", false},
 	{"treasury", "the treasury value", false},
 	{"dex", "the DCRDEX DCR/BTC spot and the price chart, if a DEX server is registered", false},
+	{"audit", "what agents spent, across all agents (the MCP Audit section)", false},
+	{"brmcp", "bot payments waiting for your approval and the bridge spend log (the BRMCP section)", false},
 }
 
 func requiredDomains() []string {

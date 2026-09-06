@@ -20,7 +20,7 @@ import (
 // sections are the Snapshot fields a trigger may watch, by Go name. Each is a
 // pointer to a section struct, and its json name is the first segment of every
 // path beneath it: Node gives node.height, BR gives br.messages.
-var sections = []string{"Node", "Staking", "Wallet", "Lightning", "Price", "Dex", "Treasury", "BR"}
+var sections = []string{"Node", "Staking", "Wallet", "Lightning", "Price", "Dex", "Treasury", "BR", "Audit", "BRMCP"}
 
 // meta are the pointer-to-struct fields of Snapshot that describe this helper
 // rather than the dcrpulse it watches, so nothing can be armed on them. Every

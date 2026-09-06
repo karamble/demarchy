@@ -775,6 +775,10 @@ func subscriptions(opt dcr.FetchOptions) []string {
 			uris = append(uris, dcr.ResWalletBal)
 		case "lightning":
 			uris = append(uris, dcr.ResLightning)
+		case "audit":
+			uris = append(uris, dcr.ResAudit)
+		case "brmcp":
+			uris = append(uris, dcr.ResBRMCP)
 		}
 	}
 	if len(uris) == 0 {

@@ -95,13 +95,30 @@ Everything below is what the panel already fetches: `wallet.*` is only fetched w
 
 <!-- catalogue:begin -->
 <!-- Generated from dcr.Catalogue() by make skill. Do not edit by hand: make lint fails when this is stale. -->
-68 paths. number and integer take crosses, changes, stalls. text and bool take becomes, stalls. A list of records takes appears, disappears, count and filters with --where on the fields shown; entries are the same entry when their identity fields match. A list of plain values takes count only.
+81 paths. number and integer take crosses, changes, stalls. text and bool take becomes, stalls. A list of records takes appears, disappears, count and filters with --where on the fields shown; entries are the same entry when their identity fields match. A list of plain values takes count only.
+
+### audit
+- `audit.count` integer: crosses, changes, stalls
+- `audit.denied` integer: crosses, changes, stalls
+- `audit.entries` list: appears, disappears, count. Fields: time, agentId, agent, tool, amountDcr, target, result, detail. Identity: time, agentId, tool
+- `audit.last` text: becomes, stalls
 
 ### br
 - `br.messages` list: appears, disappears, count. Fields: type, fromNick, text, gcid, gcName. Identity: type, fromNick, text, gcid
 - `br.nick` text: becomes, stalls
 - `br.notices` list: appears, disappears, count. Fields: id, ts, severity, subject, detail. Identity: id
 - `br.stage` text: becomes, stalls
+
+### brmcp
+- `brmcp.enabled` bool: becomes, stalls
+- `brmcp.error` text: becomes, stalls
+- `brmcp.lastDenied` text: becomes, stalls
+- `brmcp.mode` text: becomes, stalls
+- `brmcp.pending` list: appears, disappears, count. Fields: id, bot, botNick, tool, amountDcr, created, expiresAt. Identity: id
+- `brmcp.pendingCount` integer: crosses, changes, stalls
+- `brmcp.perDayCapDcr` number: crosses, changes, stalls
+- `brmcp.spend` list: appears, disappears, count. Fields: ts, bot, botNick, tool, rail, amountDcr, status, err. Identity: ts, bot, tool
+- `brmcp.todayDcr` number: crosses, changes, stalls
 
 ### dex
 - `dex.change24` number: crosses, changes, stalls
@@ -187,4 +204,5 @@ Everything below is what the panel already fetches: `wallet.*` is only fetched w
 - Do not hand-edit `~/.config/demarchy/triggers.json`. The loader rejects unknown fields, so one typo makes the whole file unreadable and nothing in it is watched. Use `arm`, `edit` and `disarm`.
 - A trigger is evaluated only on the connection it was armed on. When the user switches the active connection it shows as `other-connection` and waits. `edit` cannot move it; disarm and arm again.
 - `dex.*` exists only with a DEX server registered in dcrpulse that carries a dcr_btc market; `dex.rate`, `dex.high24` and `dex.low24` are sats per DCR like `price.sats`, and `dex.premium` reads zero while the exchange feed is unavailable.
+- `audit.*` needs the `audit` grant and `brmcp.*` the `brmcp` grant, each its own toggle in the dashboard's agent settings; without the grant the section is absent and its paths read no sample. `audit.entries` is dcrpulse's in-memory ring of every agent's write attempts, empty after a dcrpulse restart; `brmcp.pending` is the queue of bot payments waiting for the person's approval, and `brmcp.pending appears` is how you hear about one. You are being informed: nothing in demarchy or in this skill approves or denies a payment, and you must never try to. The person answers in the dashboard.
 - `lightning.list` holds only the 6 largest channels by capacity. A channel pushed out of the top 6 reads as a disappearance, and one that climbs into it reads as an appearance. `--where alias=<name>` keeps other channels from ringing you, but that channel still reads as gone if it drops out of the six.

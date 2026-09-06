@@ -104,7 +104,7 @@ Each connection carries its own MCP token. In the dcrpulse dashboard, under
 
 ```
 domains:      node, staking, bisonrelay, wallet
-              (add lightning, treasury or dex if you want those bits)
+              (add lightning, treasury, dex, audit or brmcp if you want those bits)
 write scopes: (none)
 spend:        do not grant
 allowed IPs:  127.0.0.1
@@ -152,7 +152,9 @@ the dashboard makes a section appear on its own.
 | `wallet` | balances, hidden until you ask for them |
 | `lightning` | channel inbound/outbound |
 | `treasury` | the treasury, in dollars |
-| `dex` | the DCR/BTC chart, if you have a DEX account |
+| `dex` | the DCRDEX spot and its premium over the exchange, and the DCR/BTC chart |
+| `audit` | MCP Audit: what every agent did with money, newest first |
+| `brmcp` | BRMCP: bot payments waiting for your approval, and the bridge spend log |
 
 `node` and `staking` are the two you really want. `demarchy-setup check` tells
 you what your actual token unlocks.
@@ -218,6 +220,19 @@ exchange, and Bison Relay messages. Five kinds of
 condition: `crosses` a level, `becomes` a value, `changes` by an amount or
 percent, `stalls` for a duration, and `appears` or `disappears` from a list.
 Nothing costs an extra request; the widget is fetching it anyway.
+
+### Agents and spends
+
+Two sections in the left column watch the agents themselves, each behind its
+own grant. `audit` shows dcrpulse's spend audit: every write attempt by every
+agent, who, which tool, how much, and whether it went through, was denied, or
+tripped the spend limit and got the agent's token revoked. `brmcp` shows the
+Bison Relay MCP bridge: bot payments parked for your approval, with a countdown,
+and what the bridge paid recently. A new request and a revoked agent each raise
+a desktop notification on their own, no alert needed. Both are read-only, on
+purpose: nothing in demarchy approves a payment, and no agent ever can. The
+click stays in the dcrpulse dashboard. The `brmcp` section needs a dcrpulse
+build that carries the bridge resource.
 
 Two things to know. A stall clock survives restarts, so a chain that stopped
 moving before you restarted the shell still rings on time. And **off means

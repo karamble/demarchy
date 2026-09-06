@@ -353,3 +353,64 @@ function signedPercent(value, decimals) {
   var d = decimals === undefined ? 1 : decimals
   return (value < 0 ? "-" : "+") + Math.abs(value).toFixed(d) + "%"
 }
+
+// ---- agent audit and the BRMCP bridge
+
+// isoToUnix turns an RFC3339 stamp into unix seconds, the unit `ago` takes.
+// Zero when the stamp is missing or unparseable, which `ago` renders as never.
+function isoToUnix(iso) {
+  if (!iso) return 0
+  var t = new Date(String(iso)).getTime()
+  if (!isFinite(t)) return 0
+  return Math.floor(t / 1000)
+}
+
+// shortId compresses an address or a hex id to its two ends: enough to tell
+// two apart at a glance, not enough to fill the row. Anything that already
+// fits is left alone.
+function shortId(s) {
+  var str = (s === undefined || s === null) ? "" : String(s)
+  if (str.length <= 14) return str
+  return str.slice(0, 6) + "…" + str.slice(-4)
+}
+
+// countdownSeconds is the countdown at the resolution a pending payment needs.
+// An approval window is a minute or two, so the minute-only `countdown` would
+// sit on "2m" for the whole of it.
+function countdownSeconds(iso, nowMs) {
+  var ms = remaining(iso, nowMs)
+  if (!isFinite(ms)) return ""
+  if (ms <= 0) return "now"
+  var secs = Math.ceil(ms / 1000)
+  if (secs < 60) return secs + "s"
+  return Math.floor(secs / 60) + "m " + (secs % 60) + "s"
+}
+
+// preciseDcr keeps the decimals a bot payment needs. Tips run to thousandths
+// of a DCR and below, where the two places `dcr` keeps would print zero. A
+// whole DCR or more keeps the usual two.
+function preciseDcr(value) {
+  var n = Number(value)
+  if (!isFinite(n)) return "-"
+  if (Math.abs(n) >= 1) return dcr(n, 2)
+  var digits = n.toFixed(8).replace(/0+$/, "").split(".")[1] || ""
+  return dcr(n, Math.max(2, digits.length))
+}
+
+// auditGlyph is the state mark in front of an audit row: a filled dot for a
+// write that went through, a bang for one the policy or the tool refused, a
+// cross for one the bridge blocked outright.
+function auditGlyph(result) {
+  switch (result) {
+  case "ok":      return "●"
+  case "denied":
+  case "error":   return "!"
+  case "blocked": return "✕"
+  }
+  return "·"
+}
+
+// auditUrgent marks every row that is not a clean write.
+function auditUrgent(result) {
+  return result === "denied" || result === "error" || result === "blocked"
+}

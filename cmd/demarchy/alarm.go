@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/karamble/demarchy/internal/dcr"
@@ -49,6 +51,24 @@ type alarms struct {
 	sampled  map[string]bool
 	dirty    bool
 	lastSave time.Time
+
+	notices notices
+	// told lets a test wait for the notice deliveries in flight.
+	told sync.WaitGroup
+}
+
+// notices are the two events that always deserve the desk without anyone
+// arming a trigger: a bot payment waiting for the person's approval, which
+// expires two minutes after it is raised, and an agent whose token the
+// tripwire just revoked. Each rings "you" once, through the same ringer the
+// alerts use, and is remembered only in memory: a payment outlives nothing,
+// and a blocked entry that is already in the audit when the helper starts is
+// history, not news. Nothing here can answer a request; that is a human's
+// click in the dashboard.
+type notices struct {
+	pending map[string]bool
+	blocked map[string]bool
+	primed  bool
 }
 
 type fileStamp struct {
@@ -76,7 +96,104 @@ func newAlarms(r ringer) *alarms {
 		now:     time.Now,
 		list:    &dcr.Triggers{},
 		sampled: map[string]bool{},
+		notices: notices{pending: map[string]bool{}, blocked: map[string]bool{}},
 	}
+}
+
+// notice rings the desk for what is new in the audit and the bridge.
+func (a *alarms) notice(ctx context.Context, snap *dcr.Snapshot) {
+	if snap == nil || !snap.Reachable {
+		return
+	}
+	if b := snap.BRMCP; b != nil {
+		seen := make(map[string]bool, len(b.Pending))
+		for _, p := range b.Pending {
+			seen[p.ID] = true
+			if !a.notices.pending[p.ID] {
+				a.tell(ctx, pendingText(p, a.now()))
+			}
+		}
+		// Forget what was resolved: a request raised again is a new request.
+		a.notices.pending = seen
+	}
+	if au := snap.Audit; au != nil {
+		for _, e := range au.Entries {
+			if e.Result != "blocked" {
+				continue
+			}
+			key := e.Time + "\x00" + e.AgentID + "\x00" + e.Tool
+			if a.notices.blocked[key] {
+				continue
+			}
+			a.notices.blocked[key] = true
+			if a.notices.primed {
+				a.tell(ctx, blockedText(e))
+			}
+		}
+		a.notices.primed = true
+	}
+}
+
+// tell delivers one notice to the desk in the background.
+func (a *alarms) tell(ctx context.Context, text string) {
+	fmt.Fprintln(os.Stderr, "notice:", text)
+	a.told.Add(1)
+	go func() {
+		defer a.told.Done()
+		if how, err := a.ring.Ring(ctx, dcr.You, text); err != nil {
+			fmt.Fprintln(os.Stderr, "notice not delivered:", err)
+		} else {
+			fmt.Fprintln(os.Stderr, "notice delivered by", how)
+		}
+	}()
+}
+
+func pendingText(p dcr.BRMCPPending, now time.Time) string {
+	who := p.BotNick
+	if who == "" {
+		who = shortHex(p.Bot)
+	}
+	left := ""
+	if t, err := time.Parse(time.RFC3339, p.ExpiresAt); err == nil {
+		left = ", expires in " + untilSeconds(t.Sub(now))
+	}
+	return fmt.Sprintf("brmcp approval: %s wants %s DCR for %s%s. Approve or deny in the dashboard.",
+		who, formatDcr(p.AmountDcr), p.Tool, left)
+}
+
+func blockedText(e dcr.AuditEntry) string {
+	amount := ""
+	if e.AmountDcr > 0 {
+		amount = " " + formatDcr(e.AmountDcr) + " DCR"
+	}
+	target := ""
+	if e.Target != "" {
+		target = " to " + shortHex(e.Target)
+	}
+	return fmt.Sprintf("dcrpulse blocked agent %s: %s%s%s tripped the spend limit and its token is revoked. Unblock it in the dashboard if that was wrong.",
+		e.Agent, e.Tool, amount, target)
+}
+
+func formatDcr(v float64) string { return strconv.FormatFloat(v, 'f', -1, 64) }
+
+// shortHex keeps the ends of an address, uid or txid: enough to recognise,
+// not enough to fill a notification with.
+func shortHex(s string) string {
+	if len(s) <= 14 {
+		return s
+	}
+	return s[:6] + "..." + s[len(s)-4:]
+}
+
+func untilSeconds(d time.Duration) string {
+	if d <= 0 {
+		return "now"
+	}
+	secs := int(d.Round(time.Second) / time.Second)
+	if secs < 60 {
+		return fmt.Sprintf("%ds", secs)
+	}
+	return fmt.Sprintf("%dm %ds", secs/60, secs%60)
 }
 
 // sync re-reads the store if it has changed on disk since we last saw it.
@@ -127,6 +244,9 @@ func (a *alarms) merge(disk *dcr.Triggers) *dcr.Triggers {
 // different number, and none of those are transitions.
 func (a *alarms) observe(ctx context.Context, snap *dcr.Snapshot, conn string) {
 	a.sync()
+	// The desk is told about approvals and revocations whether or not the
+	// trigger store can be read: they are not triggers.
+	a.notice(ctx, snap)
 	if a.loadErr != nil || snap == nil || !snap.Reachable || conn == "" {
 		return
 	}

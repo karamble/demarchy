@@ -31,6 +31,11 @@ const (
 	ResBRMessages = "dcrpulse://bisonrelay/messages"
 	ResStaking    = "dcrpulse://staking/activity"
 	ResLightning  = "dcrpulse://lightning/events"
+	// ResAudit is the cross-agent spend audit, updated on every write attempt;
+	// ResBRMCP is the Bison Relay MCP bridge view, updated when a bot payment
+	// is parked for approval or settles. Both are resource-only domains.
+	ResAudit = "dcrpulse://mcp/audit"
+	ResBRMCP = "dcrpulse://bisonrelay/mcp"
 )
 
 // Client is a minimal MCP client over streamable HTTP.

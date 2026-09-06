@@ -348,3 +348,50 @@ func TestDexSectionLeaves(t *testing.T) {
 		t.Fatalf("dex.rate resolved to %+v %v", v, ok)
 	}
 }
+
+// The audit and the bridge are sections of their own, each behind its grant,
+// so a token without one yields no sample rather than an empty list.
+func TestAuditAndBRMCPLeaves(t *testing.T) {
+	entries, ok := LookupLeaf("audit.entries")
+	if !ok || entries.Kind != KindList || fmt.Sprint(entries.Identity) != "[time agentId tool]" ||
+		!containsString(entries.Fields, "result") || !containsString(entries.Fields, "agent") {
+		t.Fatalf("audit.entries: %+v %v", entries, ok)
+	}
+	if denied, ok := LookupLeaf("audit.denied"); !ok || denied.Kind != KindNumber || !denied.Integer {
+		t.Fatalf("audit.denied: %+v %v", denied, ok)
+	}
+	if last, ok := LookupLeaf("audit.last"); !ok || last.Kind != KindText || !containsString(last.Operators, "stalls") {
+		t.Fatalf("audit.last: %+v %v", last, ok)
+	}
+	pending, ok := LookupLeaf("brmcp.pending")
+	if !ok || pending.Kind != KindList || fmt.Sprint(pending.Identity) != "[id]" || !containsString(pending.Fields, "botNick") {
+		t.Fatalf("brmcp.pending: %+v %v", pending, ok)
+	}
+	if spend, ok := LookupLeaf("brmcp.spend"); !ok || fmt.Sprint(spend.Identity) != "[ts bot tool]" {
+		t.Fatalf("brmcp.spend: %+v %v", spend, ok)
+	}
+	if enabled, ok := LookupLeaf("brmcp.enabled"); !ok || enabled.Kind != KindBool {
+		t.Fatalf("brmcp.enabled: %+v %v", enabled, ok)
+	}
+	if count, ok := LookupLeaf("brmcp.pendingCount"); !ok || !count.Integer {
+		t.Fatalf("brmcp.pendingCount: %+v %v", count, ok)
+	}
+	for _, path := range []string{"audit.entries", "audit.denied", "brmcp.pending", "brmcp.enabled"} {
+		if _, ok := Resolve(&Snapshot{Reachable: true}, path); ok {
+			t.Errorf("%s: no section must be no sample", path)
+		}
+	}
+	snap := &Snapshot{Reachable: true,
+		Audit: &Audit{Entries: []AuditEntry{{Time: "t1", AgentID: "a", Tool: "wallet_send", Result: "denied"}}, Count: 1, Denied: 1},
+		BRMCP: &BRMCP{Enabled: true, Pending: []BRMCPPending{{ID: "p1", BotNick: "braibot"}}, PendingCount: 1},
+	}
+	if v, ok := Resolve(snap, "audit.entries"); !ok || len(v.Items) != 1 || v.Items[0].Fields["result"] != "denied" {
+		t.Fatalf("audit.entries resolved to %+v %v", v, ok)
+	}
+	if v, ok := Resolve(snap, "brmcp.pending"); !ok || len(v.Items) != 1 || v.Items[0].Fields["botNick"] != "braibot" {
+		t.Fatalf("brmcp.pending resolved to %+v %v", v, ok)
+	}
+	if v, ok := Resolve(snap, "brmcp.pendingCount"); !ok || v.Num != 1 {
+		t.Fatalf("brmcp.pendingCount resolved to %+v %v", v, ok)
+	}
+}

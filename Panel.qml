@@ -71,6 +71,9 @@ Panel {
   readonly property bool reachable: !!snap && snap.reachable === true
   readonly property string errorCode: snap && snap.error ? String(snap.error) : ""
   readonly property int unreadTotal: (snap && snap.unread) ? (Number(snap.unread.total) || 0) : 0
+  // Bot payments the BRMCP bridge is holding for the owner's approval. Zero
+  // when the token has no brmcp grant, or the bridge is off or unreachable.
+  readonly property int pendingPayments: (snap && snap.brmcp) ? (Number(snap.brmcp.pendingCount) || 0) : 0
 
   // The connection list arrives in every snapshot with the tokens stripped, so
   // the switcher can be drawn without this process ever reading the file they
@@ -441,7 +444,10 @@ Panel {
   }
 
   Timer {
-    interval: 5000
+    // Every five seconds is plenty for "just now" and the countdowns in
+    // days; a payment waiting for approval counts down in seconds, so the
+    // clock ticks each second while one is on the board.
+    interval: root.pendingPayments > 0 ? 1000 : 5000
     repeat: true
     running: root.opened
     triggeredOnStart: true
@@ -592,7 +598,9 @@ Panel {
     // Unread paints the mark in bar.urgent through the base's 160ms fade. So
     // does an armed alert that nothing is watching: off is a choice, but one
     // the bar should not let go quiet while an agent is waiting on a trigger.
+    // And so does a bot payment waiting on the owner: it expires unanswered.
     active: root.unreadTotal > 0 || (!root.effectiveMonitoring && root.armedCount > 0)
+            || root.pendingPayments > 0
     tooltipText: {
       if (!root.effectiveMonitoring) {
         if (root.armedCount > 0)
@@ -600,6 +608,10 @@ Panel {
                  + (root.armedCount === 1 ? " alert" : " alerts") + " not watched"
         return "Demarchy: monitoring off"
       }
+      if (root.pendingPayments > 0)
+        return "Demarchy: " + root.pendingPayments
+               + (root.pendingPayments === 1 ? " payment waiting for your approval"
+                                             : " payments waiting for your approval")
       if (root.errorCode !== "") return "Demarchy, " + Model.errorLine(root.errorCode, root.snap ? root.snap.detail : "")
       if (!root.reachable) return "Demarchy: connecting"
       var line = "Decred · " + Model.nodeLine(root.snap ? root.snap.node : null)
@@ -966,6 +978,20 @@ Panel {
                 width: parent.width
                 visible: !!root.snap && !!root.snap.node
                 node: root.snap ? root.snap.node : null
+              }
+              AuditSection {
+                id: auditSection
+                width: parent.width
+                visible: !!root.snap && !!root.snap.audit
+                audit: root.snap ? root.snap.audit : null
+                now: root.now
+              }
+              BRMCPSection {
+                id: brmcpSection
+                width: parent.width
+                visible: !!root.snap && !!root.snap.brmcp
+                brmcp: root.snap ? root.snap.brmcp : null
+                now: root.now
               }
             }
 

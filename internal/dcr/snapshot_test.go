@@ -129,3 +129,81 @@ func TestParseDexSummaryRefuses(t *testing.T) {
 		t.Fatalf("first dcr_btc should win: %+v", d)
 	}
 }
+
+// The live reply of dcrpulse://mcp/audit after one message was sent.
+const auditLive = `[{"time":"2026-09-06T01:49:25.56315081Z","agentId":"95c2ef004368d113","agent":"omarchy","tool":"br_send_message","account":0,"amountDcr":0,"target":"karamble","result":"ok"}]`
+
+func TestParseAudit(t *testing.T) {
+	a := parseAudit([]byte(auditLive))
+	if a == nil || a.Count != 1 || a.Denied != 0 || len(a.Entries) != 1 {
+		t.Fatalf("live audit: %+v", a)
+	}
+	e := a.Entries[0]
+	if e.Agent != "omarchy" || e.Tool != "br_send_message" || e.Target != "karamble" || e.Result != "ok" ||
+		e.AgentID != "95c2ef004368d113" || a.Last != e.Time || e.Time != "2026-09-06T01:49:25.56315081Z" {
+		t.Fatalf("entry: %+v", e)
+	}
+	// The ring is counted whole, the panel carries only the newest.
+	var b []byte
+	b = append(b, '[')
+	for i := 0; i < 25; i++ {
+		if i > 0 {
+			b = append(b, ',')
+		}
+		result := "ok"
+		switch i % 5 {
+		case 1:
+			result = "denied"
+		case 2:
+			result = "blocked"
+		}
+		b = append(b, []byte(`{"time":"2026-09-06T01:00:`+string(rune('0'+i/10))+string(rune('0'+i%10))+`Z","agentId":"a","agent":"duty","tool":"wallet_send","amountDcr":1.5,"target":"DsXk3QfMhbnkJ7Yz2sGw9vQxvA7eXk3Qf4","result":"`+result+`","detail":"x"}`)...)
+	}
+	b = append(b, ']')
+	a = parseAudit(b)
+	if a == nil || a.Count != 25 || a.Denied != 10 || len(a.Entries) != auditCarry || a.Last != a.Entries[0].Time {
+		t.Fatalf("ring of 25: %+v", a)
+	}
+	for _, raw := range []string{`null`, `{not json`, `{"a":1}`} {
+		if parseAudit([]byte(raw)) != nil {
+			t.Errorf("%s should be no sample", raw)
+		}
+	}
+	if a := parseAudit([]byte(`[]`)); a == nil || a.Count != 0 || a.Last != "" || len(a.Entries) != 0 {
+		t.Fatalf("an empty ring is a sample with nothing in it: %+v", a)
+	}
+}
+
+// The golden reply of dcrpulse://bisonrelay/mcp agreed with the dcrpulse side.
+const brmcpGolden = `{"enabled":true,"mode":"approval","perCallCapDcr":0.05,"perDayCapDcr":0.5,"approvalTimeoutSecs":120,"todayDcr":0.012,"lastDenied":{"ip":"10.0.0.9","at":"2026-09-05T20:00:00Z"},"pending":[{"id":"p-7f3a","bot":"8cafda06372331b1","botNick":"braibot","tool":"image","amountDcr":0.004,"created":"2026-09-06T02:10:00Z","expiresAt":"2026-09-06T02:12:00Z"}],"spend":[{"ts":"2026-09-06T01:40:00Z","bot":"8cafda06372331b1","botNick":"braibot","tool":"image","rail":"tip","amountDcr":0.004,"status":"paid"},{"ts":"2026-09-06T01:35:00Z","bot":"87df4e08913b6383","tool":"search","rail":"tip","amountDcr":0.001,"status":"failed","err":"tip timed out"}]}`
+
+func TestParseBRMCP(t *testing.T) {
+	b := parseBRMCP([]byte(brmcpGolden))
+	if b == nil || !b.Enabled || b.Mode != "approval" || b.TodayDcr != 0.012 || b.PerDayCapDcr != 0.5 {
+		t.Fatalf("golden: %+v", b)
+	}
+	if b.PendingCount != 1 || len(b.Pending) != 1 || b.Pending[0].ID != "p-7f3a" || b.Pending[0].BotNick != "braibot" ||
+		b.Pending[0].ExpiresAt != "2026-09-06T02:12:00Z" || b.Pending[0].AmountDcr != 0.004 {
+		t.Fatalf("pending: %+v", b.Pending)
+	}
+	if len(b.Spend) != 2 || b.Spend[0].Status != "paid" || b.Spend[1].Err != "tip timed out" || b.Spend[1].BotNick != "" {
+		t.Fatalf("spend: %+v", b.Spend)
+	}
+	if b.LastDenied != "10.0.0.9 at 2026-09-05T20:00:00Z" || b.Error != "" {
+		t.Fatalf("denied/error: %q %q", b.LastDenied, b.Error)
+	}
+
+	down := parseBRMCP([]byte(`{"enabled":false,"pending":[],"spend":[],"error":"brclientd /settings/mcpclient: dial tcp 127.0.0.1:7677: connection refused"}`))
+	if down == nil || down.Enabled || down.Error == "" || down.PendingCount != 0 || down.Pending == nil || down.Spend == nil {
+		t.Fatalf("unreachable bridge: %+v", down)
+	}
+	off := parseBRMCP([]byte(`{"enabled":false}`))
+	if off == nil || off.Enabled || off.Error != "" || len(off.Pending) != 0 || len(off.Spend) != 0 {
+		t.Fatalf("switched off: %+v", off)
+	}
+	for _, raw := range []string{`null`, `{not json`} {
+		if parseBRMCP([]byte(raw)) != nil {
+			t.Errorf("%s should be no sample", raw)
+		}
+	}
+}

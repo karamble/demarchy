@@ -111,6 +111,31 @@ func demoSnapshot() *dcr.Snapshot {
 			Source: "demo", Updated: now.Format(time.RFC3339),
 			Series: demoCandles(), Change: 4.2, Market: "dcr_btc",
 		},
+		Audit: &dcr.Audit{
+			Entries: []dcr.AuditEntry{
+				{Time: now.Add(-11 * time.Minute).UTC().Format(time.RFC3339), AgentID: "95c2ef004368d113", Agent: "omarchy",
+					Tool: "br_send_message", Target: "karamble", Result: "ok"},
+				{Time: now.Add(-48 * time.Minute).UTC().Format(time.RFC3339), AgentID: "1a2b3c4d5e6f7a8b", Agent: "duty",
+					Tool: "wallet_send", AmountDcr: 1.25, Target: "DsXk3QfMhbnkJ7Yz2sGw9vQxvA7eXk3Qf4",
+					Result: "denied", Detail: "per-tx cap is 1 DCR"},
+			},
+			Count: 2, Denied: 1, Last: now.Add(-11 * time.Minute).UTC().Format(time.RFC3339),
+		},
+		BRMCP: &dcr.BRMCP{
+			Enabled: true, Mode: "approval", TodayDcr: 0.012, PerDayCapDcr: 0.5,
+			Pending: []dcr.BRMCPPending{{
+				ID: "p-7f3a", Bot: "8cafda06372331b1", BotNick: "braibot", Tool: "image", AmountDcr: 0.004,
+				Created:   now.Add(-30 * time.Second).UTC().Format(time.RFC3339),
+				ExpiresAt: now.Add(90 * time.Second).UTC().Format(time.RFC3339),
+			}},
+			PendingCount: 1,
+			Spend: []dcr.BRMCPSpend{
+				{TS: now.Add(-20 * time.Minute).UTC().Format(time.RFC3339), Bot: "8cafda06372331b1", BotNick: "braibot",
+					Tool: "image", Rail: "tip", AmountDcr: 0.004, Status: "paid"},
+				{TS: now.Add(-25 * time.Minute).UTC().Format(time.RFC3339), Bot: "87df4e08913b6383", BotNick: "MCPdirectory",
+					Tool: "search", Rail: "tip", AmountDcr: 0.001, Status: "failed", Err: "tip timed out"},
+			},
+		},
 		Dex: &dcr.Dex{
 			Host: "dex.decred.org:7232", Market: "dcr_btc",
 			Rate: 20450, RateUsd: 16.28, Change24: -1.3, High24: 21100, Low24: 19900,

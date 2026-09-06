@@ -270,3 +270,85 @@ func TestBrokenStoreIsReportedNotEvaluated(t *testing.T) {
 		t.Fatal("a broken store should be reported to the panel")
 	}
 }
+
+func withPending(clock time.Time, ids ...string) *dcr.Snapshot {
+	b := &dcr.BRMCP{Enabled: true, Mode: "approval", Pending: []dcr.BRMCPPending{}}
+	for _, id := range ids {
+		b.Pending = append(b.Pending, dcr.BRMCPPending{
+			ID: id, Bot: "8cafda06372331b1fb712ab24382d890", BotNick: "braibot", Tool: "image", AmountDcr: 0.004,
+			ExpiresAt: clock.Add(90 * time.Second).UTC().Format(time.RFC3339),
+		})
+	}
+	b.PendingCount = len(b.Pending)
+	return &dcr.Snapshot{Reachable: true, BRMCP: b}
+}
+
+// A payment waiting for approval rings the desk once, a second request rings
+// again, and a request raised again after being resolved is a new request.
+func TestNoticesRingEachPendingPaymentOnce(t *testing.T) {
+	ring := &fakeRinger{how: "notification"}
+	a, clock := board(t, ring)
+	ctx := context.Background()
+
+	a.observe(ctx, withPending(*clock, "p1"), "c")
+	a.told.Wait()
+	if ring.count() != 1 || ring.calls[0].target != "you" ||
+		!strings.Contains(ring.calls[0].text, "braibot wants 0.004 DCR for image, expires in 1m 30s") ||
+		!strings.Contains(ring.calls[0].text, "Approve or deny in the dashboard") {
+		t.Fatalf("first notice: %+v", ring.calls)
+	}
+	a.observe(ctx, withPending(*clock, "p1"), "c")
+	a.told.Wait()
+	if ring.count() != 1 {
+		t.Fatal("the same request rang twice")
+	}
+	a.observe(ctx, withPending(*clock, "p1", "p2"), "c")
+	a.told.Wait()
+	if ring.count() != 2 {
+		t.Fatalf("a second request should ring: %d", ring.count())
+	}
+	a.observe(ctx, withPending(*clock), "c")
+	a.observe(ctx, withPending(*clock, "p1"), "c")
+	a.told.Wait()
+	if ring.count() != 3 {
+		t.Fatalf("a request raised again is new: %d", ring.count())
+	}
+	for _, c := range ring.calls {
+		if strings.Contains(strings.ToLower(c.text), "approve ") && !strings.Contains(c.text, "Approve or deny in the dashboard") {
+			t.Fatalf("a notice must never offer to approve: %s", c.text)
+		}
+	}
+}
+
+func withAudit(entries ...dcr.AuditEntry) *dcr.Snapshot {
+	return &dcr.Snapshot{Reachable: true, Audit: &dcr.Audit{Entries: entries, Count: len(entries)}}
+}
+
+// A blocked agent rings the desk once, but not for history already in the
+// audit when the helper starts, and never for a plain denial.
+func TestNoticesRingNewBlockedEntriesOnly(t *testing.T) {
+	ring := &fakeRinger{how: "notification"}
+	a, _ := board(t, ring)
+	ctx := context.Background()
+	old := dcr.AuditEntry{Time: "2026-09-06T01:00:00Z", AgentID: "a1", Agent: "duty", Tool: "wallet_send",
+		AmountDcr: 5, Target: "DsXk3QfMhbnkJ7Yz2sGw9vQxvA7eXk3Qf4", Result: "blocked"}
+	denied := dcr.AuditEntry{Time: "2026-09-06T01:01:00Z", AgentID: "a1", Agent: "duty", Tool: "wallet_send", Result: "denied"}
+
+	a.observe(ctx, withAudit(denied, old), "c")
+	a.told.Wait()
+	if ring.count() != 0 {
+		t.Fatalf("history at startup rang: %+v", ring.calls)
+	}
+	fresh := dcr.AuditEntry{Time: "2026-09-06T01:05:00Z", AgentID: "a2", Agent: "scout", Tool: "ln_pay",
+		AmountDcr: 0.2, Target: "03abcdef0123456789abcdef", Result: "blocked"}
+	a.observe(ctx, withAudit(fresh, denied, old), "c")
+	a.told.Wait()
+	if ring.count() != 1 || !strings.Contains(ring.calls[0].text, "blocked agent scout: ln_pay 0.2 DCR to 03abcd...cdef") {
+		t.Fatalf("new blocked entry: %+v", ring.calls)
+	}
+	a.observe(ctx, withAudit(fresh, denied, old), "c")
+	a.told.Wait()
+	if ring.count() != 1 {
+		t.Fatal("the same blocked entry rang twice")
+	}
+}

@@ -5,6 +5,7 @@
 package dcr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -64,7 +65,11 @@ type Snapshot struct {
 	Dex        *Dex        `json:"dex,omitempty"`
 	Treasury   *Treasury   `json:"treasury,omitempty"`
 	BR         *BR         `json:"br,omitempty"`
-	Unread     Unread      `json:"unread"`
+	// Audit and BRMCP are what agents did with money, and what waits on the
+	// person: present only with the audit and brmcp grants respectively.
+	Audit  *Audit `json:"audit,omitempty"`
+	BRMCP  *BRMCP `json:"brmcp,omitempty"`
+	Unread Unread `json:"unread"`
 	// Triggers is the alerts board as the panel sees it: definitions and a
 	// status each, never a sampled value. TriggersError says why the store
 	// could not be read, so the view shows the reason instead of an empty list.
@@ -219,6 +224,76 @@ type Dex struct {
 	Premium float64 `json:"premium"`
 	Updated string  `json:"updated"` // RFC 3339, the last trade
 }
+
+// Audit is dcrpulse's cross-agent spend audit: every write attempt by every
+// agent, newest first, as far back as dcrpulse's in-memory ring reaches (it
+// starts empty at each dcrpulse restart). Targets and details carry addresses
+// and txids in clear; the panel shortens them and never stores them.
+type Audit struct {
+	Entries []AuditEntry `json:"entries"` // newest first, at most auditCarry
+	Count   int          `json:"count"`   // entries in the ring
+	Denied  int          `json:"denied"`  // denied or blocked in the ring
+	Last    string       `json:"last,omitempty"`
+}
+
+// AuditEntry is one write attempt. Time, agent and tool identify it: an agent
+// cannot make two attempts in the same nanosecond with the same tool.
+type AuditEntry struct {
+	Time      string  `json:"time" trig:"id"`
+	AgentID   string  `json:"agentId" trig:"id"`
+	Agent     string  `json:"agent"`
+	Tool      string  `json:"tool" trig:"id"`
+	AmountDcr float64 `json:"amountDcr"`
+	Target    string  `json:"target,omitempty"`
+	Result    string  `json:"result"` // ok, denied, error, blocked
+	Detail    string  `json:"detail,omitempty"`
+}
+
+// auditCarry bounds what the panel receives; dcrpulse keeps 200.
+const auditCarry = 20
+
+// BRMCP is the Bison Relay MCP bridge as dcrpulse sees it: bot tool payments
+// parked for the person's approval, and the bridge's spend log. It shows
+// requests and never carries a way to answer them: approving is a click in
+// the dashboard, by a human, and nothing here may do it.
+type BRMCP struct {
+	Enabled      bool    `json:"enabled"`
+	Mode         string  `json:"mode,omitempty"` // approval, caps
+	TodayDcr     float64 `json:"todayDcr"`
+	PerDayCapDcr float64 `json:"perDayCapDcr"`
+	LastDenied   string  `json:"lastDenied,omitempty"`
+	// Error is set when brclientd or the bridge could not be reached; Enabled
+	// false with no Error means the bridge is switched off.
+	Error        string         `json:"error,omitempty"`
+	Pending      []BRMCPPending `json:"pending"`
+	PendingCount int            `json:"pendingCount"`
+	Spend        []BRMCPSpend   `json:"spend"` // newest first, at most brmcpCarry
+}
+
+// BRMCPPending is one payment waiting for approval. It expires on its own.
+type BRMCPPending struct {
+	ID        string  `json:"id" trig:"id"`
+	Bot       string  `json:"bot"`
+	BotNick   string  `json:"botNick,omitempty"`
+	Tool      string  `json:"tool"`
+	AmountDcr float64 `json:"amountDcr"`
+	Created   string  `json:"created"`
+	ExpiresAt string  `json:"expiresAt"`
+}
+
+// BRMCPSpend is one payment the bridge made or tried to make.
+type BRMCPSpend struct {
+	TS        string  `json:"ts" trig:"id"`
+	Bot       string  `json:"bot" trig:"id"`
+	BotNick   string  `json:"botNick,omitempty"`
+	Tool      string  `json:"tool" trig:"id"`
+	Rail      string  `json:"rail,omitempty"`
+	AmountDcr float64 `json:"amountDcr"`
+	Status    string  `json:"status,omitempty"` // paid, pending, failed
+	Err       string  `json:"err,omitempty"`
+}
+
+const brmcpCarry = 20
 
 // Treasury carries only the USD sum; the DCR balance is what produces it.
 type Treasury struct {
@@ -378,6 +453,12 @@ func Fetch(ctx context.Context, c *Client, opt FetchOptions) *Snapshot {
 	}
 	if opt.allows("treasury") {
 		snap.Treasury = fetchTreasury(ctx, c, snap.Price)
+	}
+	if opt.allows("audit") {
+		snap.Audit = fetchAudit(ctx, c)
+	}
+	if opt.allows("brmcp") {
+		snap.BRMCP = fetchBRMCP(ctx, c)
 	}
 	if opt.allows("dex") && snap.Price != nil {
 		attachCandles(ctx, c, snap.Price)
@@ -977,3 +1058,96 @@ func parseDexSummary(raw json.RawMessage, price *Price) *Dex {
 
 // toSats turns a conventional BTC-per-DCR rate into whole sats per DCR.
 func toSats(conventional float64) int64 { return int64(math.Round(conventional * 1e8)) }
+
+// fetchAudit reads the spend audit resource. Nil when the read fails or the
+// resource is empty in the MCP sense (null), so a missing grant and a broken
+// read look the same to the panel and the alerts: no sample.
+func fetchAudit(ctx context.Context, c *Client) *Audit {
+	raw, err := c.ReadResource(ctx, ResAudit)
+	if err != nil {
+		return nil
+	}
+	return parseAudit(raw)
+}
+
+// parseAudit keeps the newest entries and counts the whole ring, so the panel
+// can say "12 in log, 2 denied" while carrying only what it draws.
+func parseAudit(raw json.RawMessage) *Audit {
+	var wire []struct {
+		Time      string  `json:"time"`
+		AgentID   string  `json:"agentId"`
+		Agent     string  `json:"agent"`
+		Tool      string  `json:"tool"`
+		AmountDcr float64 `json:"amountDcr"`
+		Target    string  `json:"target"`
+		Result    string  `json:"result"`
+		Detail    string  `json:"detail"`
+	}
+	if json.Unmarshal(raw, &wire) != nil || wire == nil {
+		return nil
+	}
+	a := &Audit{Entries: make([]AuditEntry, 0, min(len(wire), auditCarry)), Count: len(wire)}
+	for i, w := range wire {
+		if w.Result == "denied" || w.Result == "blocked" {
+			a.Denied++
+		}
+		if i < auditCarry {
+			a.Entries = append(a.Entries, AuditEntry{
+				Time: w.Time, AgentID: w.AgentID, Agent: w.Agent, Tool: w.Tool,
+				AmountDcr: w.AmountDcr, Target: w.Target, Result: w.Result, Detail: w.Detail,
+			})
+		}
+	}
+	if len(a.Entries) > 0 {
+		a.Last = a.Entries[0].Time
+	}
+	return a
+}
+
+// fetchBRMCP reads the bridge view. dcrpulse answers with content even when
+// brclientd is unreachable (enabled false plus an error text), so nil here
+// means only that dcrpulse itself did not answer or the grant is missing.
+func fetchBRMCP(ctx context.Context, c *Client) *BRMCP {
+	raw, err := c.ReadResource(ctx, ResBRMCP)
+	if err != nil {
+		return nil
+	}
+	return parseBRMCP(raw)
+}
+
+func parseBRMCP(raw json.RawMessage) *BRMCP {
+	var wire struct {
+		Enabled      bool    `json:"enabled"`
+		Mode         string  `json:"mode"`
+		TodayDcr     float64 `json:"todayDcr"`
+		PerDayCapDcr float64 `json:"perDayCapDcr"`
+		LastDenied   *struct {
+			IP string `json:"ip"`
+			At string `json:"at"`
+		} `json:"lastDenied"`
+		Error   string         `json:"error"`
+		Pending []BRMCPPending `json:"pending"`
+		Spend   []BRMCPSpend   `json:"spend"`
+	}
+	if json.Unmarshal(raw, &wire) != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil
+	}
+	b := &BRMCP{
+		Enabled: wire.Enabled, Mode: wire.Mode, TodayDcr: wire.TodayDcr, PerDayCapDcr: wire.PerDayCapDcr,
+		Error: wire.Error, Pending: wire.Pending, Spend: wire.Spend,
+	}
+	if wire.LastDenied != nil && wire.LastDenied.At != "" {
+		b.LastDenied = wire.LastDenied.IP + " at " + wire.LastDenied.At
+	}
+	if b.Pending == nil {
+		b.Pending = []BRMCPPending{}
+	}
+	if b.Spend == nil {
+		b.Spend = []BRMCPSpend{}
+	}
+	if len(b.Spend) > brmcpCarry {
+		b.Spend = b.Spend[:brmcpCarry]
+	}
+	b.PendingCount = len(b.Pending)
+	return b
+}
