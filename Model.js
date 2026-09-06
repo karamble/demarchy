@@ -222,3 +222,117 @@ function connError(result) {
   }
   return detail !== "" ? detail : "That did not work."
 }
+
+// ---- alerts
+
+// alertGlyph is the one-character state mark in front of a trigger row. The
+// filled forms are live, the hollow and crossed forms are spent, and the bang
+// is a trigger that is armed but not actually being watched.
+function alertGlyph(status) {
+  switch (status) {
+  case "armed":           return "●"
+  case "rearming":        return "◔"
+  case "fired":           return "○"
+  case "expired":         return "✕"
+  case "no-sample":
+  case "other-connection":
+  case "delivery-failed": return "!"
+  }
+  return "·"
+}
+
+// alertUrgent marks the rows that should not read as calm: a trigger the
+// helper cannot see, one armed somewhere else, one it could not deliver, and
+// one that ran out.
+function alertUrgent(status) {
+  return status === "no-sample" || status === "other-connection"
+      || status === "delivery-failed" || status === "expired"
+}
+
+// alertArmed is what counts as an alert that wants watching: armed, waiting to
+// re-arm, or armed on a section the helper has no sample for yet. It is what
+// the bar counts when monitoring is off.
+function alertArmed(status) {
+  return status === "armed" || status === "rearming" || status === "no-sample"
+}
+
+// alertSpent is a trigger with nothing left to do but be cleared.
+function alertSpent(status) {
+  return status === "fired" || status === "expired" || status === "delivery-failed"
+}
+
+// remaining is the milliseconds until an ISO timestamp, or NaN when it is not
+// one. nowMs is optional so the callers with a ticking clock can share it.
+function remaining(iso, nowMs) {
+  if (!iso) return NaN
+  var t = new Date(String(iso)).getTime()
+  if (!isFinite(t)) return NaN
+  var now = nowMs === undefined ? Date.now() : Number(nowMs)
+  return t - now
+}
+
+// countdown is the time left in one unit: days, then hours, then minutes.
+// Finer than that is noise in a list glanced at a few times a day.
+function countdown(iso, nowMs) {
+  var ms = remaining(iso, nowMs)
+  if (!isFinite(ms)) return ""
+  if (ms <= 0) return "now"
+  var mins = Math.ceil(ms / 60000)
+  if (mins < 60) return mins + "m"
+  var hours = Math.floor(mins / 60)
+  if (hours < 24) return hours + "h"
+  return Math.floor(hours / 24) + "d"
+}
+
+// expiresSoon is the countdown's colour rule: under a day left is urgent.
+function expiresSoon(iso, nowMs) {
+  var ms = remaining(iso, nowMs)
+  return isFinite(ms) && ms < 86400000
+}
+
+// clockTime is a wall-clock time of day in the local zone, for "fired 21:14".
+function clockTime(iso) {
+  if (!iso) return ""
+  var d = new Date(String(iso))
+  if (!isFinite(d.getTime())) return ""
+  return Qt.formatTime(d, "HH:mm")
+}
+
+// alertError turns the helper's answer to arm, edit or disarm into a sentence.
+// Unlike connError there is no code table: the helper already says what was
+// wrong with the trigger in words, and the code adds nothing to them.
+function alertError(result) {
+  if (!result || result.ok) return ""
+  var detail = String(result.detail || "")
+  return detail !== "" ? detail : "That did not work."
+}
+
+// agentStates maps a herdr pane id, or an agent's display name, to
+// { pane, status, title }. A bare status string is accepted too, so a caller
+// with nothing but liveness still gets an answer.
+function agentEntry(deliverTo, agentStates) {
+  if (!agentStates) return null
+  var a = agentStates[String(deliverTo)]
+  if (a === undefined || a === null) return null
+  return (typeof a === "object") ? a : { status: String(a), title: "" }
+}
+
+// recipientLabel names who a trigger wakes: the user, the agent's display name
+// or terminal title when herdr knows it, else the raw id.
+function recipientLabel(deliverTo, agentStates) {
+  var id = String(deliverTo || "you")
+  if (id === "you") return "you"
+  var a = agentEntry(id, agentStates)
+  return (a && a.title) ? String(a.title) : id
+}
+
+// recipientState is the word beside a group header. The user needs none: a
+// desktop notification always has somewhere to go. An agent herdr does not
+// list is not running, and a fired trigger would wake nobody.
+function recipientState(deliverTo, agentStates) {
+  var id = String(deliverTo || "you")
+  if (id === "you") return ""
+  var a = agentEntry(id, agentStates)
+  if (!a) return "not running"
+  return a.status === "blocked" ? "blocked" : "running"
+}

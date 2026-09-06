@@ -125,6 +125,38 @@ func demoSnapshot() *dcr.Snapshot {
 				{Type: "gc-message", FromNick: "relay", Text: "[m] <obelix> pool is holding just under 42k", GCID: "d1", GCName: "dcr-support"},
 			},
 		},
-		Unread: dcr.Unread{Private: 1, Groupchat: 2, Total: 3},
+		Unread:   dcr.Unread{Private: 1, Groupchat: 2, Total: 3},
+		Triggers: demoTriggers(),
+	}
+}
+
+// demoTriggers is an alerts board with one of everything the view draws: an
+// agent's standing alert, a one-shot of yours, and a spent one that was heard.
+func demoTriggers() []dcr.TriggerView {
+	now := time.Now()
+	fired := now.Add(-37 * time.Minute)
+	changed := now.Add(-3 * time.Minute)
+	return []dcr.TriggerView{
+		{
+			ID: "t-7f3a9c21", Rev: 1, Connection: "omarchy",
+			Path: "price.dcrUsd", Operator: "crosses", Params: "above 16",
+			DeliverTo: "w8:p1", Once: true, ExpiresAt: now.Add(3*24*time.Hour + 20*time.Hour),
+			Reason: "sell leg of the rebalance, approved", ArmedBy: "w8:p1", ArmedAt: now.Add(-2 * time.Hour),
+			Status: "armed", LastChangedAt: &changed,
+		},
+		{
+			ID: "t-2b91e0c4", Rev: 2, Connection: "omarchy",
+			Path: "node.height", Operator: "stalls", Params: "for 45m",
+			DeliverTo: "w8:p1", Once: false, ExpiresAt: now.Add(6 * 24 * time.Hour),
+			Reason: "chain watch while the rebalance runs", ArmedBy: "w8:p1", ArmedAt: now.Add(-2 * time.Hour),
+			Status: "armed", LastChangedAt: &changed,
+		},
+		{
+			ID: "t-c05d17aa", Rev: 1, Connection: "omarchy",
+			Path: "br.messages", Operator: "appears", Params: "where fromNick=alice",
+			DeliverTo: "you", Once: true, ExpiresAt: now.Add(11 * time.Hour),
+			Reason: "waiting for the invoice", ArmedBy: "you", ArmedAt: now.Add(-3 * time.Hour),
+			Status: "fired", FiredAt: &fired, LastChangedAt: &fired, FireCount: 1, Delivered: "notification",
+		},
 	}
 }

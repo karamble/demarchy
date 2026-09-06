@@ -72,10 +72,27 @@ func main() {
   demarchy-setup list         list the stored connections
   demarchy-setup check        re-validate every stored connection
   demarchy-setup remove <id>  delete a connection and its token
-  demarchy-setup purge        delete every connection and the config directory
+  demarchy-setup purge        delete every connection, the alerts board and the skill links
 
-Tokens are stored in %s, mode 0600.
-`, dcr.ConnectionsPath())
+  demarchy-setup catalogue    every value an alert can watch, with its operators
+  demarchy-setup alerts       what is armed, grouped by who will hear it
+  demarchy-setup arm <path> <operator> [params] --expires <4d|12h|date> [--reason <text>]
+                              [--deliver <agent|you>] [--standing] [--connection <id>] [--dry-run]
+  demarchy-setup edit <id> [same flags]
+  demarchy-setup disarm <id>
+  demarchy-setup skill        print the agent skill; --recipes for the worked examples;
+                              --install links it where every agent harness looks, --uninstall unlinks
+
+  Params by operator: --above X | --below X [--rearm R]; --value V [--hold 5m];
+  --by X [--percent]; --for 45m; --where field=value (or field~=text) [--key field].
+  Inside a herdr pane, arm delivers back to that agent unless --deliver says otherwise.
+  --dry-run validates and prints the trigger as it would be stored, saving nothing.
+
+  Agents: SKIP if the demarchy-alerts skill is already in your context.
+  Otherwise run: demarchy-setup skill
+
+Tokens are stored in %s, mode 0600; alerts in %s.
+`, dcr.ConnectionsPath(), dcr.TriggersPath())
 	}
 	flag.Parse()
 
@@ -94,6 +111,17 @@ func run(args []string) error {
 	// when the file itself is what is broken.
 	if verb == "purge" {
 		return purge(args[1:])
+	}
+	// The skill prints from the binary alone, so a broken connection list
+	// never stops an agent from reading how to use this.
+	if verb == "skill" {
+		return skillVerb(args[1:])
+	}
+	// Alerts have their own file, so a broken connection list never stops one
+	// being listed or disarmed. Arming binds to a connection and reads the
+	// list itself.
+	if handled, err := alertVerb(verb, args[1:]); handled {
+		return err
 	}
 
 	list, err := dcr.LoadConnections()
@@ -145,19 +173,22 @@ func purge(args []string) error {
 
 	dir := dcr.ConfigDir()
 	var found []string
-	for _, name := range []string{dcr.ConnectionsFile, "token"} {
+	for _, name := range []string{dcr.ConnectionsFile, "token", dcr.TriggersFile, dcr.TriggerLockFile} {
 		p := filepath.Join(dir, name)
 		if _, err := os.Stat(p); err == nil {
 			found = append(found, p)
 		}
 	}
-	if len(found) == 0 {
+	// The skill links dangle once the plugin folder is gone, so they go too.
+	home, _ := os.UserHomeDir()
+	links := ourLinks(home)
+	if len(found) == 0 && len(links) == 0 {
 		fmt.Println("Nothing stored; nothing to remove.")
 		return nil
 	}
 
-	fmt.Println("This deletes every stored connection and its token:")
-	for _, p := range found {
+	fmt.Println("This deletes every stored connection and its token, the alerts board, and the agent skill links:")
+	for _, p := range append(append([]string{}, found...), links...) {
 		fmt.Println("   ", p)
 	}
 	fmt.Println()
@@ -183,6 +214,11 @@ func purge(args []string) error {
 	// Only if it is now empty: a person may keep other things in there.
 	if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
 		_ = os.Remove(dir)
+	}
+	if home != "" {
+		if _, err := removeLinks(os.Stdout, home); err != nil {
+			return err
+		}
 	}
 	fmt.Println("Removed.")
 	return nil

@@ -44,10 +44,20 @@ Panel {
 
   // ---- state fed by the helper
   property var snap: null
-  property bool settingsOpen: false
+  // Which view the card is showing: "dashboard", "settings" or "alerts". A
+  // string rather than a flag because there are more than two of them, and
+  // the cursor has to know whose rows it is walking.
+  property string view: "dashboard"
+  // Kept as a derived read so the gear, its tooltip and the settings page can
+  // go on asking the simple question.
+  readonly property bool settingsOpen: root.view === "settings"
   property bool balancesRevealed: false
-  // Keyboard cursor into the settings rows; -1 means nothing is focused.
+  // Keyboard cursor into the active view's rows; -1 means nothing is focused.
   property int cursor: -1
+  // The view that owns the cursor, or null while the dashboard is up and there
+  // are no rows to walk.
+  readonly property var activeView: root.view === "settings" ? settingsView
+                                    : root.view === "alerts" ? alertsView : null
   // Wall clock for the freshness line. It ticks only while the panel is open,
   // because nothing else reads it.
   property double now: Date.now()
@@ -79,11 +89,44 @@ Panel {
   readonly property var plainHttp: (snap && snap.plainHttp) ? snap.plainHttp : null
   readonly property string configError: (snap && snap.configError) ? snap.configError : ""
 
-  // The settings rows grow and shrink with the connection list, so a cursor
-  // parked at the bottom has to come back inside when one goes away.
-  onConnectionsChanged: {
-    if (root.settingsOpen && root.cursor >= settingsView.rowCount)
-      root.cursor = settingsView.rowCount - 1
+  // ---- triggers. While monitoring is on the running helper evaluates them
+  // and the snapshot is the truth. While it is off there is no helper, so the
+  // one-shot's last `list` reply stands in. The catalogue only ever comes from
+  // the one-shot: the snapshot does not carry it.
+  property var listedTriggers: []
+  property string listedTriggersError: ""
+  property var catalogue: []
+  readonly property var triggers: (root.effectiveMonitoring && root.snap)
+                                  ? (root.snap.triggers || []) : root.listedTriggers
+  readonly property string triggersError: (root.effectiveMonitoring && root.snap)
+                                          ? (root.snap.triggersError ? String(root.snap.triggersError) : "")
+                                          : root.listedTriggersError
+  // What the bar counts when monitoring is off: armed, waiting to re-arm, or
+  // armed on a section the helper has no sample for. All three want watching.
+  readonly property int armedCount: {
+    var n = 0
+    for (var i = 0; i < root.triggers.length; i++)
+      if (Model.alertArmed(String(root.triggers[i].status))) n++
+    return n
+  }
+  // herdr pane id -> { pane, status, title }, and the same entry again under
+  // the agent's display name when it has one, since a trigger may be armed
+  // with either. Empty when herdr is not installed, which is a normal state
+  // rather than a failure.
+  property var agentStates: ({})
+  // The one-shot's answer to the last arm, edit or disarm. The form shows it
+  // under itself when it was a refusal.
+  property var triggerResult: null
+
+  // The settings rows grow and shrink with the connection list, and the alert
+  // rows with the triggers, so a cursor parked at the bottom has to come back
+  // inside when one goes away.
+  onConnectionsChanged: root.clampCursor()
+  onTriggersChanged: root.clampCursor()
+
+  function clampCursor() {
+    if (root.activeView && root.cursor >= root.activeView.rowCount)
+      root.cursor = root.activeView.rowCount - 1
   }
 
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
@@ -198,8 +241,17 @@ Panel {
   Process {
     id: helperProbe
     running: false
-    onExited: function (code) { root.helperMissing = code !== 0 }
+    onExited: function (code) {
+      root.helperMissing = code !== 0
+      // With monitoring off nothing else ever reads the triggers file, and the
+      // bar has to know whether anything armed is going unwatched. Only once
+      // the helper is known to exist: a missing binary logs a warning per
+      // attempt and answers nothing.
+      if (code === 0 && !root.effectiveMonitoring) root.triggerCommand({ cmd: "list" })
+    }
   }
+
+  Component.onCompleted: root.probeHelper()
 
   Timer {
     id: restartTimer
@@ -264,6 +316,109 @@ Panel {
   // said, because it is the reply to what the user just did.
   property var applyResult: null
 
+  // Trigger commands go to their own one-shot, for the same reason connection
+  // changes do: the alerts page has to work while monitoring is off, and a
+  // trigger armed while it is off is the very case the bar warns about.
+  property var pendingTrigger: null
+  // Which command the reply in flight answers. A list reply and an arm reply
+  // are told apart by what was asked, not by guessing at their shape.
+  property string triggerCmd: ""
+
+  function triggerCommand(obj) {
+    if (triggersProc.running) return
+    // A fresh command retires the last refusal, so a reopened form does not
+    // start out under an old message.
+    if (obj.cmd !== "list") root.triggerResult = null
+    root.pendingTrigger = obj
+    root.triggerCmd = String(obj.cmd)
+    triggersProc.command = [root.helperPath, "--triggers"]
+    triggersProc.running = true
+  }
+
+  // The list and the agent states together: the page shows one beside the
+  // other, so they should be of the same moment.
+  function refreshAlerts() {
+    root.triggerCommand({ cmd: "list" })
+    root.refreshAgents()
+  }
+
+  Process {
+    id: triggersProc
+    running: false
+    stdinEnabled: true
+    stdout: StdioCollector { id: triggersOut; waitForEnd: true }
+    onStarted: {
+      write(JSON.stringify(root.pendingTrigger) + "\n")
+      root.pendingTrigger = null
+    }
+    onExited: {
+      var res = null
+      try { res = JSON.parse(String(triggersOut.text || "").trim()) } catch (e) { res = null }
+      if (root.triggerCmd === "list") {
+        if (res && res.ok) {
+          root.listedTriggers = res.triggers || []
+          root.catalogue = res.catalogue || []
+          root.listedTriggersError = ""
+        } else {
+          root.listedTriggersError = res ? Model.alertError(res) : "The helper gave no answer."
+        }
+        root.refreshAgents()
+        return
+      }
+      root.triggerResult = res
+      if (res && res.ok) {
+        // The store was written. Only now does the form close, never on the
+        // click, and the list is read back so the page shows what was written
+        // rather than what was typed. The re-run waits a beat because this
+        // process is still winding down. The running helper, if there is one,
+        // is holding a list that just changed.
+        alertsView.list.cancel()
+        Qt.callLater(function () { root.triggerCommand({ cmd: "list" }) })
+        root.refreshNow()
+      }
+    }
+  }
+
+  // Agent liveness comes from herdr, read-only. A recipient it does not list
+  // is not running, which the page says beside the group.
+  function refreshAgents() {
+    if (herdrProc.running) return
+    herdrProc.running = true
+  }
+
+  Process {
+    id: herdrProc
+    running: false
+    command: ["herdr", "agent", "list"]
+    stdout: StdioCollector { id: herdrOut; waitForEnd: true }
+    onExited: function (code) {
+      // A missing herdr never gets here (see helperProc) and a failing one
+      // exits non-zero. Either way there is nothing to show, and that is a
+      // normal state, so the map is simply left empty.
+      var states = {}
+      if (code === 0) {
+        var parsed = null
+        try { parsed = JSON.parse(String(herdrOut.text || "").trim()) } catch (e) { parsed = null }
+        var agents = (parsed && parsed.result && parsed.result.agents) ? parsed.result.agents : []
+        for (var i = 0; i < agents.length; i++) {
+          var a = agents[i]
+          if (!a || !a.pane_id) continue
+          // A renamed agent carries display_agent: its label, and a second
+          // address a trigger may name. Unset, the key is absent altogether.
+          var name = (typeof a.display_agent === "string") ? a.display_agent : ""
+          var entry = {
+            pane: String(a.pane_id),
+            status: String(a.agent_status || "unknown"),
+            title: String(name || a.terminal_title_stripped || a.terminal_title || a.pane_id)
+          }
+          states[entry.pane] = entry
+          if (name !== "") states[name] = entry
+        }
+      }
+      root.agentStates = states
+    }
+  }
+
   Timer {
     interval: 5000
     repeat: true
@@ -284,19 +439,27 @@ Panel {
       root.bar.shell.updateEntryInline(root.moduleName, entry)
   }
 
-  // Removing a connection deletes a stored credential, so it takes two
-  // decisions. The dialog lives here rather than in the settings page because
-  // it has to cover the whole card.
-  property var pendingRemove: null
+  // Removing a connection deletes a stored credential, and disarming an alert
+  // takes away something an agent is waiting on, so both take two decisions.
+  // The dialog lives here rather than in the pages because it has to cover the
+  // whole card. kind is "connection" or "alert"; name is what the question
+  // shows.
+  property var pendingConfirm: null
 
-  function askRemove(id, name) {
-    root.pendingRemove = { id: id, name: name }
+  function askConfirm(kind, id, name) {
+    root.pendingConfirm = { kind: kind, id: id, name: name }
   }
 
-  function confirmRemove() {
-    var p = root.pendingRemove
-    root.pendingRemove = null
-    if (p) root.applyConnection({ cmd: "removeConnection", id: p.id })
+  function askDisarm(id, label) {
+    root.askConfirm("alert", id, label)
+  }
+
+  function confirmPending() {
+    var p = root.pendingConfirm
+    root.pendingConfirm = null
+    if (!p) return
+    if (p.kind === "alert") root.triggerCommand({ cmd: "disarm", id: p.id })
+    else root.applyConnection({ cmd: "removeConnection", id: p.id })
   }
 
   // The single choke point for the kill switch: panel toggle, middle-click and
@@ -306,13 +469,25 @@ Panel {
     root.pendingMonitoring = v
     root.helperRetries = 0
     if (v) root.probeHelper()
-    if (!v) root.snap = null
+    if (!v) {
+      root.snap = null
+      // The snapshot was the source of the trigger list; the one-shot is now.
+      root.triggerCommand({ cmd: "list" })
+    }
     persist({ monitoring: v })
   }
 
   onSettingsChanged: {
     if (root.pendingMonitoring !== null && root.monitoring === root.pendingMonitoring)
       root.pendingMonitoring = null
+  }
+
+  // Every change of view goes through here so the cursor travels with it: the
+  // dashboard has no rows, so it parks at -1; any other view starts on its
+  // first row.
+  function setView(v) {
+    root.view = v
+    root.cursor = (v === "dashboard") ? -1 : 0
   }
 
   onOpenedChanged: {
@@ -323,8 +498,7 @@ Panel {
       // Re-mask on close, so a revealed balance never survives into the next
       // time the panel is opened.
       root.balancesRevealed = false
-      root.settingsOpen = false
-      root.cursor = -1
+      root.setView("dashboard")
     }
   }
 
@@ -333,7 +507,7 @@ Panel {
   function openSwitcher() {
     if (root.connections.length === 0) return
     if (!root.opened) root.open()
-    root.settingsOpen = false
+    root.setView("dashboard")
     Qt.callLater(function () {
       var scene = connTrigger.mapToGlobal(0, 0)
       connSwitcher.openAt(scene.x, scene.y)
@@ -341,8 +515,12 @@ Panel {
   }
 
   function openSettings() {
-    root.settingsOpen = true
-    root.cursor = 0
+    root.setView("settings")
+    if (!root.opened) root.open()
+  }
+
+  function openAlerts() {
+    root.setView("alerts")
     if (!root.opened) root.open()
   }
 
@@ -355,6 +533,7 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function settings(): void { root.openSettings() }
+    function alerts(): void { root.openAlerts() }
     function connections(): void { root.openSwitcher() }
     function connection(): string { return root.activeConnection }
     function useConnection(id: string): void { root.switchConnection(id) }
@@ -371,6 +550,7 @@ Panel {
         error: root.errorCode,
         unread: root.unreadTotal,
         settingsOpen: root.settingsOpen,
+        view: root.view,
         opened: root.opened,
         showBalances: root.showBalances
       })
@@ -385,10 +565,17 @@ Panel {
     anchors.verticalCenter: parent.verticalCenter
     bar: root.bar
     slotSize: Style.bar.statusSlot
-    // Unread paints the mark in bar.urgent through the base's 160ms fade.
-    active: root.unreadTotal > 0
+    // Unread paints the mark in bar.urgent through the base's 160ms fade. So
+    // does an armed alert that nothing is watching: off is a choice, but one
+    // the bar should not let go quiet while an agent is waiting on a trigger.
+    active: root.unreadTotal > 0 || (!root.effectiveMonitoring && root.armedCount > 0)
     tooltipText: {
-      if (!root.effectiveMonitoring) return "Demarchy: monitoring off"
+      if (!root.effectiveMonitoring) {
+        if (root.armedCount > 0)
+          return "Demarchy: monitoring off, " + root.armedCount
+                 + (root.armedCount === 1 ? " alert" : " alerts") + " not watched"
+        return "Demarchy: monitoring off"
+      }
       if (root.errorCode !== "") return "Demarchy, " + Model.errorLine(root.errorCode, root.snap ? root.snap.detail : "")
       if (!root.reachable) return "Demarchy: connecting"
       var line = "Decred · " + Model.nodeLine(root.snap ? root.snap.node : null)
@@ -446,9 +633,9 @@ Panel {
       anchors.fill: parent
       // A focused form field owns every key, so typing a name or a token does
       // not trip the panel's letter shortcuts.
-      blocked: root.settingsOpen && settingsView.formFocused
+      blocked: !!root.activeView && root.activeView.formFocused
       onCloseRequested: {
-        if (root.pendingRemove) root.pendingRemove = null
+        if (root.pendingConfirm) root.pendingConfirm = null
         else root.close()
       }
       onTabRequested: function (direction) { root.switchPanel(direction) }
@@ -458,8 +645,10 @@ Panel {
       onTextKey: function (t) {
         switch (String(t).toLowerCase()) {
         case "s":
-          root.settingsOpen = !root.settingsOpen
-          root.cursor = root.settingsOpen ? 0 : -1
+          root.setView(root.view === "settings" ? "dashboard" : "settings")
+          break
+        case "a":
+          root.setView(root.view === "alerts" ? "dashboard" : "alerts")
           break
         case "m":
           root.setMonitoring(!root.effectiveMonitoring)
@@ -470,6 +659,9 @@ Panel {
           break
         case "r":
           root.refreshNow()
+          // On the alerts page a refresh is also a re-read of the list and of
+          // who is there to receive it.
+          if (root.view === "alerts") root.refreshAlerts()
           break
         case "n":
           // Opened from the keyboard, so there is no pointer to hang it off;
@@ -479,37 +671,40 @@ Panel {
         }
       }
       onMoveRequested: function (dx, dy) {
-        if (!root.settingsOpen) return
+        if (!root.activeView) return
         if (dy !== 0) {
-          var n = settingsView.rowCount
+          var n = root.activeView.rowCount
           root.cursor = root.cursor < 0 ? (dy > 0 ? 0 : n - 1)
                                         : (root.cursor + dy + n) % n
           return
         }
-        if (dx !== 0) settingsView.moveAction(dx)
+        if (dx !== 0) root.activeView.moveAction(dx)
       }
       onActivateRequested: {
-        if (root.pendingRemove) { root.confirmRemove(); return }
-        if (root.settingsOpen && root.cursor >= 0) settingsView.activateRow(root.cursor)
+        if (root.pendingConfirm) { root.confirmPending(); return }
+        if (root.activeView && root.cursor >= 0) root.activeView.activateRow(root.cursor)
       }
 
       ConfirmDialog {
-        id: removeDialog
+        id: confirmDialog
         anchors.fill: parent
         // Without a z the dialog paints in declaration order, so the settings
         // content lands on top of it and the scrim looks see-through.
         z: 20
-        opened: !!root.pendingRemove
-        message: root.pendingRemove
-                 ? "Remove \"" + root.pendingRemove.name + "\"? Its stored token is deleted too."
-                 : ""
-        confirmText: "Remove"
+        opened: !!root.pendingConfirm
+        message: {
+          var p = root.pendingConfirm
+          if (!p) return ""
+          if (p.kind === "alert") return "Disarm \"" + p.name + "\"?"
+          return "Remove \"" + p.name + "\"? Its stored token is deleted too."
+        }
+        confirmText: (root.pendingConfirm && root.pendingConfirm.kind === "alert") ? "Disarm" : "Remove"
         foreground: Color.popups.text
         background: Color.popups.background
         scrim: Util.alpha(Color.popups.background, 0.85)
         selectedText: Color.urgent
-        onConfirmed: root.confirmRemove()
-        onCanceled: root.pendingRemove = null
+        onConfirmed: root.confirmPending()
+        onCanceled: root.pendingConfirm = null
       }
 
       ConnectionSwitcher {
@@ -517,13 +712,10 @@ Panel {
         connections: root.connections
         activeId: root.activeConnection
         onChosen: function (id) { root.switchConnection(id) }
-        onManageRequested: {
-          root.settingsOpen = true
-          root.cursor = 0
-        }
+        onManageRequested: root.setView("settings")
       }
       onReturnRequested: {
-        if (root.settingsOpen && root.cursor >= 0) settingsView.activateRow(root.cursor)
+        if (root.activeView && root.cursor >= 0) root.activeView.activateRow(root.cursor)
       }
 
       Column {
@@ -577,6 +769,31 @@ Panel {
                 }
               }
 
+              // The bell opens the alerts board the way the gear opens
+              // settings. It turns urgent for the one state the bar mark also
+              // shows: alerts armed while nothing is watching them.
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: "\uf0f3"
+                color: (!root.effectiveMonitoring && root.armedCount > 0) ? Color.urgent : Color.popups.text
+                opacity: root.view === "alerts" ? 0.9 : (bellHover.hovered ? 0.8 : 0.45)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.icon
+                HoverHandler { id: bellHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                  onTapped: root.setView(root.view === "alerts" ? "dashboard" : "alerts")
+                }
+                PanelToolTip {
+                  visible: bellHover.hovered
+                  text: {
+                    if (root.view === "alerts") return "Back to status  (a)"
+                    if (!root.effectiveMonitoring && root.armedCount > 0)
+                      return "Alerts: " + root.armedCount + " armed, not watched  (a)"
+                    return "Alerts  (a)"
+                  }
+                }
+              }
+
               Text {
                 anchors.verticalCenter: parent.verticalCenter
                 text: "\uf013"
@@ -586,10 +803,7 @@ Panel {
                 font.pixelSize: Style.font.icon
                 HoverHandler { id: gearHover; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
-                  onTapped: {
-                    root.settingsOpen = !root.settingsOpen
-                    root.cursor = root.settingsOpen ? 0 : -1
-                  }
+                  onTapped: root.setView(root.view === "settings" ? "dashboard" : "settings")
                 }
                 PanelToolTip {
                   visible: gearHover.hovered
@@ -616,7 +830,7 @@ Panel {
         // an explanation whenever there is nothing good to draw
         Text {
           width: parent.width
-          visible: text !== "" && !root.settingsOpen
+          visible: text !== "" && root.view === "dashboard"
           wrapMode: Text.WordWrap
           text: {
             if (!root.effectiveMonitoring) return "Monitoring is off. The switch above turns it on."
@@ -638,7 +852,7 @@ Panel {
 
         Text {
           width: parent.width
-          visible: !root.settingsOpen && root.errorCode !== "" && !!root.snap && root.snap.stamp > 0
+          visible: root.view === "dashboard" && root.errorCode !== "" && !!root.snap && root.snap.stamp > 0
           text: "Last reached " + Model.ago(root.snap ? root.snap.stamp : 0, root.now)
           textFormat: Text.PlainText
           color: Color.popups.text
@@ -652,7 +866,7 @@ Panel {
         StakingHero {
           id: hero
           width: parent.width
-          visible: !root.settingsOpen && root.reachable && !!root.snap && !!root.snap.staking
+          visible: root.view === "dashboard" && root.reachable && !!root.snap && !!root.snap.staking
           own: root.snap && root.snap.staking ? root.snap.staking.own : null
           staking: root.snap ? root.snap.staking : null
           now: root.now
@@ -670,7 +884,7 @@ Panel {
           id: columns
           width: parent.width
           spacing: Style.space(20)
-          visible: !root.settingsOpen && root.reachable && !!root.snap
+          visible: root.view === "dashboard" && root.reachable && !!root.snap
 
           Column {
             id: leftColumn
@@ -727,7 +941,7 @@ Panel {
         BRSection {
           id: brSection
           width: parent.width
-          visible: !root.settingsOpen && root.reachable && !!root.snap && !!root.snap.br
+          visible: root.view === "dashboard" && root.reachable && !!root.snap && !!root.snap.br
           br: root.snap ? root.snap.br : null
           unread: root.snap ? root.snap.unread : null
           messageLimit: 3
@@ -756,7 +970,7 @@ Panel {
           onConnEdit: function (id, name, endpoint, token) {
             root.applyConnection({ cmd: "editConnection", id: id, name: name, endpoint: endpoint, token: token })
           }
-          onConnRemove: function (id, name) { root.askRemove(id, name) }
+          onConnRemove: function (id, name) { root.askConfirm("connection", id, name) }
           onFocusReleased: keyCatcher.forceActiveFocus()
           onConnSwitch: function (id) { root.switchConnection(id) }
           onChanged: function (key, value) {
@@ -772,6 +986,28 @@ Panel {
                                  root.pluginDir + "/bin/demarchy-setup"]
             setupProc.running = true
           }
+        }
+
+        // ---- alerts view. The page arms, edits and disarms through the
+        // one-shot; disarming goes by way of the confirmation first.
+        AlertsView {
+          id: alertsView
+          width: parent.width
+          cursor: root.cursor
+          visible: root.view === "alerts"
+          triggers: root.triggers
+          catalogue: root.catalogue
+          triggersError: root.triggersError
+          monitoring: root.effectiveMonitoring
+          agentStates: root.agentStates
+          activeConnection: root.activeConnection
+          result: root.triggerResult
+          now: root.now
+          onArm: function (spec) { root.triggerCommand(Object.assign({ cmd: "arm" }, spec)) }
+          onEdit: function (id, spec) { root.triggerCommand(Object.assign({ cmd: "edit", id: id }, spec)) }
+          onDisarm: function (id, label) { root.askDisarm(id, label) }
+          onRefreshRequested: root.refreshAlerts()
+          onFocusReleased: keyCatcher.forceActiveFocus()
         }
 
         // ---- footer: which connection this is, and the keys
@@ -835,11 +1071,16 @@ Panel {
             anchors.leftMargin: Style.space(10)
             anchors.verticalCenter: parent.verticalCenter
             horizontalAlignment: Text.AlignRight
-            text: root.settingsOpen
-                  ? "↑↓ row · ←→ action · enter do · s back · esc close"
-                  : "n connection · s settings · m monitor" +
-                    (root.showBalances && root.reachable ? " · b reveal" : "") +
-                    " · r refresh"
+            // One legend per view.
+            text: {
+              if (root.view === "settings")
+                return "↑↓ row · ←→ action · enter do · s back · esc close"
+              if (root.view === "alerts")
+                return "↑↓ row · ←→ action · enter do · a back · esc close"
+              return "n connection · s settings · a alerts · m monitor" +
+                     (root.showBalances && root.reachable ? " · b reveal" : "") +
+                     " · r refresh"
+            }
             textFormat: Text.PlainText
             elide: Text.ElideLeft
             color: Color.popups.text

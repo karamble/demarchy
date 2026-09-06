@@ -39,6 +39,7 @@ func main() {
 		messages  = flag.Int("messages", 20, "chat ring entries to carry into the panel")
 		force     = flag.Bool("force", false, "ignore the monitoring switch (debugging only)")
 		apply1    = flag.Bool("apply", false, "read one JSON command from stdin, apply it, print the result and exit")
+		triggers1 = flag.Bool("triggers", false, "read one JSON alerts command from stdin, apply it, print the result and exit")
 		demo      = flag.Bool("demo", false, "emit a synthetic snapshot and exit; for building the panel, never used by the widget")
 	)
 	flag.Parse()
@@ -93,6 +94,13 @@ func main() {
 		applyOnce(ctx, out)
 		return
 	}
+	// The alerts board is managed the same way, for the same reason: an agent
+	// arms a trigger, or the panel edits one, whether or not monitoring is on.
+	// Evaluating them needs the running helper; listing and arming do not.
+	if *triggers1 {
+		triggersOnce(ctx, out)
+		return
+	}
 
 	list, err := dcr.LoadConnections()
 	if err != nil {
@@ -133,6 +141,9 @@ func main() {
 		return
 	}
 
+	// Alarms ring only from the long-running watch: a one-shot has no loop to
+	// take a delivery result on.
+	sess.alarms = newAlarms(newHerdrRinger())
 	watch(ctx, sess, emit)
 }
 
@@ -159,6 +170,17 @@ type session struct {
 
 	overrideEndpoint string
 	overrideToken    string
+
+	// alarms is the trigger board; nil in the one-shots, which never evaluate.
+	alarms *alarms
+}
+
+// connID is the id triggers are bound to, or "" before a connection is chosen.
+func (s *session) connID() string {
+	if s.conn == nil {
+		return ""
+	}
+	return s.conn.ID
 }
 
 // livePolicy is what the client consults per request and per dial.
@@ -195,6 +217,11 @@ func (s *session) fingerprint() string {
 // switch to the id that is already active, so no gesture in the panel could
 // rebuild it.
 func (s *session) resync(ctx context.Context) bool {
+	// Triggers armed or disarmed by the CLI are picked up here too, on the
+	// same cadence, without ever restarting the stream.
+	if s.alarms != nil {
+		s.alarms.sync()
+	}
 	fresh, err := dcr.LoadConnections()
 	if err != nil {
 		s.loadErr = err
@@ -281,6 +308,9 @@ func (s *session) decorate(snap *dcr.Snapshot) *dcr.Snapshot {
 	snap.PlainHTTP = s.livePolicy().Public()
 	if s.loadErr != nil {
 		snap.ConfigError = s.loadErr.Error()
+	}
+	if s.alarms != nil {
+		snap.Triggers, snap.TriggersError = s.alarms.views(time.Now(), snap.Active)
 	}
 	return snap
 }
@@ -395,6 +425,18 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 	var count counter
 	commands := readCommands(ctx)
 
+	alarms := sess.alarms
+	if alarms == nil {
+		alarms = newAlarms(newHerdrRinger())
+		sess.alarms = alarms
+	}
+	alarms.reload()
+	// A fire whose delivery never came back is rung again before anything
+	// else: the alarm happened, and losing it to a crash is the one failure
+	// this whole board exists to rule out.
+	alarms.recover(ctx)
+	defer alarms.save(true)
+
 	refresh := make(chan struct{}, 1)
 	poke := func() {
 		select {
@@ -442,8 +484,12 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 				count = counter{}
 			}
 			callCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			snap := sess.decorate(dcr.Fetch(callCtx, sess.client, sess.opt))
+			snap := dcr.Fetch(callCtx, sess.client, sess.opt)
 			cancel()
+			// Triggers are bound to a connection, so folding a snapshot from
+			// a fresh switch through them evaluates only the ones armed there.
+			alarms.observe(ctx, snap, sess.connID())
+			sess.decorate(snap)
 			snap.Unread = count.unread()
 			snap.ConnResult = result
 			emit(snap)
@@ -497,15 +543,25 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 					cancelStream()
 					break inner
 				}
+			case r := <-alarms.results:
+				alarms.settle(r)
+				// So the panel sees "delivered" without waiting for a beat.
+				poke()
 			case <-refresh:
 				callCtx, cancel := context.WithTimeout(streamCtx, 30*time.Second)
-				snap := sess.decorate(dcr.Fetch(callCtx, sess.client, sess.opt))
+				snap := dcr.Fetch(callCtx, sess.client, sess.opt)
 				cancel()
 				if snap.Reachable {
 					connected = true
 					backoff = time.Second
 					count.fold(snap)
+					// After the unread fold and before decorate, so the
+					// snapshot that goes out carries the status this pass
+					// produced. Deliveries run with the watch's own context,
+					// not the stream's: a reconnect must not cancel a ring.
+					alarms.observe(ctx, snap, sess.connID())
 				}
+				sess.decorate(snap)
 				snap.Unread = count.unread()
 				emit(snap)
 				if !snap.Reachable {
@@ -533,6 +589,8 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 			case <-ctx.Done():
 				timer.Stop()
 				return
+			case r := <-alarms.results:
+				alarms.settle(r)
 			case cmd := <-commands:
 				restart, quit := handleCommand(cmd)
 				if quit {

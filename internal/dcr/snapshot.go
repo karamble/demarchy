@@ -64,6 +64,11 @@ type Snapshot struct {
 	Treasury   *Treasury   `json:"treasury,omitempty"`
 	BR         *BR         `json:"br,omitempty"`
 	Unread     Unread      `json:"unread"`
+	// Triggers is the alerts board as the panel sees it: definitions and a
+	// status each, never a sampled value. TriggersError says why the store
+	// could not be read, so the view shows the reason instead of an empty list.
+	Triggers      []TriggerView `json:"triggers,omitempty"`
+	TriggersError string        `json:"triggersError,omitempty"`
 }
 
 // ConnResult is the answer to a connection command from the panel.
@@ -165,7 +170,7 @@ type Lightning struct {
 
 // LnChannel is one channel's share of the picture.
 type LnChannel struct {
-	Alias    string  `json:"alias"`
+	Alias    string  `json:"alias" trig:"id"`
 	Capacity float64 `json:"capacity"`
 	Local    float64 `json:"local"`
 	Remote   float64 `json:"remote"`
@@ -209,7 +214,7 @@ type BR struct {
 // connection and housekeeping events: NOT chat, which is why the unread badge
 // is not built on them.
 type Notice struct {
-	ID       int64  `json:"id"`
+	ID       int64  `json:"id" trig:"id"`
 	TS       string `json:"ts"`
 	Severity string `json:"severity"`
 	Subject  string `json:"subject"`
@@ -220,10 +225,10 @@ type Notice struct {
 // timestamp and no read flag, which is why unread is counted by this helper
 // rather than read from the server.
 type Message struct {
-	Type     string `json:"type"`
-	FromNick string `json:"fromNick"`
-	Text     string `json:"text"`
-	GCID     string `json:"gcid,omitempty"`
+	Type     string `json:"type" trig:"id"`
+	FromNick string `json:"fromNick" trig:"id"`
+	Text     string `json:"text" trig:"id"`
+	GCID     string `json:"gcid,omitempty" trig:"id"`
 	GCName   string `json:"gcName,omitempty"`
 }
 

@@ -31,13 +31,27 @@ MCP interface, with a token that can only read.
 ```bash
 omarchy plugin add https://github.com/karamble/demarchy.git --enable
 cd ~/.config/omarchy/plugins/karamble.demarchy && make build
+bin/demarchy-setup skill --install    # once: teach your coding agents the alerts
 ```
 
 **The second line matters.** No binaries are shipped here, so the two small Go
 helpers are compiled on your own machine. It needs Go 1.24 or newer and builds
-nothing else. The panel tells you if you skip it.
+nothing else. The panel tells you if you skip it. The third line links the
+agent skill (see Alerts) where every coding agent Omarchy supports looks for
+skills; skip it if no agent runs on this machine.
 
 Then add a connection, flip the switch in the panel, and you are done.
+
+## Updating
+
+```bash
+omarchy plugin update karamble.demarchy
+cd ~/.config/omarchy/plugins/karamble.demarchy && make build
+```
+
+The update is a git pull inside the plugin folder, so the agent skill follows
+it by itself: the links point into that folder. The two binaries are built
+locally and need the second line every time.
 
 ## Connections
 
@@ -112,12 +126,14 @@ terminal.
 ## Removing it
 
 ```bash
-demarchy-setup purge              # delete every stored connection and its token
+demarchy-setup purge              # connections and tokens, the alerts board, the skill links
 omarchy plugin remove karamble.demarchy
 ```
 
 Do the purge first. Removing the plugin takes the plugin folder away but leaves
-`~/.config/demarchy/` behind, and what is in there is bearer tokens.
+`~/.config/demarchy/` behind, and what is in there is bearer tokens; it also
+leaves the agent skill links pointing at nothing, which purge removes. To drop
+only the skill links and keep the plugin, `demarchy-setup skill --uninstall`.
 
 Purging deletes them from this machine; it does not revoke them. If you want a
 token dead everywhere, delete its agent in the dcrpulse dashboard under
@@ -151,6 +167,67 @@ you what your actual token unlocks.
 | `showBalances` | off | Whether balances appear; masked until you reveal them |
 | `activeConnection` | first stored | Set by the footer switcher |
 
+## Alerts
+
+Demarchy already watches your dcrpulse every few seconds. Alerts let that
+watching wake something up.
+
+An alert is a condition on a value the panel already shows, armed by you or by
+an AI agent, with a reason and an expiry. When it trips, demarchy rings: it sends
+a message into the agent's session through herdr, or a desktop notification to
+you. The woken agent then looks at dcrpulse itself and decides what to do.
+
+Demarchy never does the looking or the doing. It holds a read-only token, it
+never answers a question about live data, and it never acts on anything. It
+watches, remembers what is armed, and rings. That is the whole job, on purpose.
+
+```bash
+demarchy-setup catalogue                                    # what can be watched
+demarchy-setup arm price.dcrUsd crosses --above 16 \
+    --expires 4d --reason "sell leg of the rebalance"      # arm one
+demarchy-setup alerts                                       # what is armed
+demarchy-setup edit t-7f3a9c21 --above 17 --expires 2d      # change one in place
+demarchy-setup arm node.height stalls --for 45m --expires 2d --dry-run   # check, save nothing
+demarchy-setup disarm t-7f3a9c21
+```
+
+Every verb takes `--json` for a machine. Params by operator: `--above X` or
+`--below X` (with `--rearm R` to set the re-arm margin), `--value V` (with
+`--hold 5m`), `--by X` (with `--percent`), `--for 45m`, and `--where field=value`
+or `--where field~=text` for a substring, with `--key field` to choose what
+counts as the same list entry.
+
+Run from inside a herdr pane, `arm` knows which agent it is and delivers back to
+it. Run from a plain terminal, it delivers to you. Every alert expires, and each
+one rings once unless you pass `--standing`. `--dry-run` validates and prints
+the alert as it would be stored, without saving it.
+
+Agents learn all of this from a skill shipped in `agents/skills/demarchy-alerts`,
+laid out the way Omarchy ships its own. `demarchy-setup skill --install` links
+it where every agent harness Omarchy supports looks for skills (the install
+steps above include it, and `make install` runs it); the links point into the
+plugin folder, so an update reaches the agents by itself. `demarchy-setup skill`
+prints it, `--recipes` prints one worked example per condition, `--uninstall`
+takes the links away, and the path catalogue inside it is generated from the
+code, so it cannot go stale.
+
+What can be watched is exactly what is in the panel: the ticket price and its
+window, your tickets, the node's height and peers, wallet balances, Lightning
+liquidity and channels, the DCR price, and Bison Relay messages. Five kinds of
+condition: `crosses` a level, `becomes` a value, `changes` by an amount or
+percent, `stalls` for a duration, and `appears` or `disappears` from a list.
+Nothing costs an extra request; the widget is fetching it anyway.
+
+Two things to know. A stall clock survives restarts, so a chain that stopped
+moving before you restarted the shell still rings on time. And **off means
+off**: when monitoring is paused, alerts are not watched, and the bar and the
+panel say so loudly rather than pretending.
+
+Press `a`, or the bell beside the gear, for the alerts view: what is armed, for whom, with how long left,
+grouped by the agent that will hear it. Edit a value, disarm one, or arm a new
+one for yourself. Alerts live in `~/.config/demarchy/triggers.json`, the same
+0600 home as your connections.
+
 ## Keys
 
 Omarchy is keyboard-first, and so is this.
@@ -159,10 +236,12 @@ Omarchy is keyboard-first, and so is this.
 |---|---|
 | `n` | connection switcher |
 | `s` | settings, and back |
+| `a` | alerts, and back |
 | `m` | monitoring on/off |
 | `b` | reveal balances |
 | `r` | refresh now |
 | `↑ ↓` `enter` | move and choose |
+| `← →` | pick an action on a row |
 | `esc` | close |
 
 The bar item does one thing: click opens the panel. No hidden right- or
@@ -173,6 +252,7 @@ omarchy-shell karamble.demarchy toggle
 omarchy-shell karamble.demarchy connections
 omarchy-shell karamble.demarchy useConnection vps
 omarchy-shell karamble.demarchy toggleMonitor
+omarchy-shell karamble.demarchy alerts
 ```
 
 ## Requirements

@@ -1,7 +1,9 @@
 PLUGIN_ID := karamble.demarchy
 DEST      := $(HOME)/.config/omarchy/plugins/$(PLUGIN_ID)
 
-.PHONY: all build install lint test clean
+.PHONY: all build install lint test clean skill skill-check
+
+SKILL := agents/skills/demarchy-alerts/SKILL.md
 
 all: build
 
@@ -16,8 +18,20 @@ build:
 install: build
 	mkdir -p $(DEST)
 	rsync -a --delete --exclude .git --exclude cmd --exclude internal \
-	      --exclude go.mod --exclude go.sum --exclude Makefile ./ $(DEST)/
+	      --exclude go.mod --exclude go.sum --exclude Makefile --exclude '*.go' ./ $(DEST)/
+	$(DEST)/bin/demarchy-setup skill --install
 	omarchy-shell -q shell rescanPlugins || true
+
+# The catalogue block inside SKILL.md is rendered from the Go types. Through
+# go run, never bin/: a stale binary embeds a stale file. Written beside the
+# target and moved into place: a redirect straight onto $(SKILL) would truncate
+# it before go run had compiled the embed of that very file.
+skill:
+	go run ./cmd/demarchy-setup skill > $(SKILL).new && mv $(SKILL).new $(SKILL)
+
+skill-check:
+	@go run ./cmd/demarchy-setup skill | diff -u $(SKILL) - \
+	  || { echo "skill catalogue is stale; run: make skill"; exit 1; }
 
 # The qmllint and qmlformat on PATH may not be Qt 6's: some distributions ship
 # an unrelated binary of the same name that reports version 1.0 and fails on
@@ -27,7 +41,7 @@ QMLFORMAT := $(shell command -v qmlformat6 2>/dev/null || echo /usr/lib/qt6/bin/
 SHELL_DIR := $(or $(OMARCHY_PATH),/usr/share/omarchy)/shell
 LINTROOT  := $(CURDIR)/.lintroot
 
-lint: test
+lint: test skill-check
 	go vet ./...
 	@unformatted=$$(gofmt -l .); 	  test -z "$$unformatted" || { echo "gofmt needed on:"; echo "$$unformatted"; exit 1; }
 	@for f in *.qml; do $(QMLFORMAT) "$$f" >/dev/null || { echo "failed to parse $$f"; exit 1; }; done
