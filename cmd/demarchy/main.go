@@ -371,6 +371,20 @@ func (c *counter) observe(msgs []dcr.Message, countPrivate, countGroup bool) {
 	}
 }
 
+// fold reads the chat ring out of a snapshot, if the snapshot has one.
+//
+// BR is absent when the token lacks the bisonrelay domain, and Reachable says
+// nothing about which sections came back. A node-only token used to crash the
+// helper on its first good fetch, right here.
+func (c *counter) fold(snap *dcr.Snapshot) {
+	if snap == nil || snap.BR == nil {
+		return
+	}
+	c.observe(snap.BR.Messages,
+		dcr.BoolSetting("countPrivate", true),
+		dcr.BoolSetting("countGroupchat", true))
+}
+
 func (c *counter) unread() dcr.Unread {
 	return dcr.Unread{Private: c.private, Groupchat: c.group, Total: c.private + c.group}
 }
@@ -490,9 +504,7 @@ func watch(ctx context.Context, sess *session, emit func(*dcr.Snapshot)) {
 				if snap.Reachable {
 					connected = true
 					backoff = time.Second
-					count.observe(snap.BR.Messages,
-						dcr.BoolSetting("countPrivate", true),
-						dcr.BoolSetting("countGroupchat", true))
+					count.fold(snap)
 				}
 				snap.Unread = count.unread()
 				emit(snap)
