@@ -111,6 +111,11 @@ func demoSnapshot() *dcr.Snapshot {
 			Source: "demo", Updated: now.Format(time.RFC3339),
 			Series: demoCandles(), Change: 4.2, Market: "dcr_btc",
 		},
+		Dex: &dcr.Dex{
+			Host: "dex.decred.org:7232", Market: "dcr_btc",
+			Rate: 20450, RateUsd: 16.28, Change24: -1.3, High24: 21100, Low24: 19900,
+			Volume24: 13873.3, Premium: -0.4, Updated: now.Format(time.RFC3339),
+		},
 		Treasury: &dcr.Treasury{
 			BalanceDCR: 877368.39, BalanceUsd: 877368.39 * 16.33246913,
 		},

@@ -336,3 +336,20 @@ function recipientState(deliverTo, agentStates) {
   if (!a) return "not running"
   return a.status === "blocked" ? "blocked" : "running"
 }
+
+// premiumWords says how the DEX rate sits against the exchange feed, as a
+// phrase: "0.2% under exchange". Within a twentieth of a percent it is level.
+function premiumWords(premium) {
+  if (!isFinite(premium)) return ""
+  var p = Math.abs(premium)
+  if (p < 0.05) return "at exchange price"
+  return p.toFixed(1) + "% " + (premium < 0 ? "under" : "over") + " exchange"
+}
+
+// signedPercent carries its sign either way, for a figure that is a
+// comparison rather than a change: "+0.4%" is a premium, "-0.2%" a discount.
+function signedPercent(value, decimals) {
+  if (!isFinite(value)) return "-"
+  var d = decimals === undefined ? 1 : decimals
+  return (value < 0 ? "-" : "+") + Math.abs(value).toFixed(d) + "%"
+}

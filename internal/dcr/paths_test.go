@@ -6,6 +6,7 @@ package dcr
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"regexp"
 	"sort"
@@ -323,5 +324,27 @@ func TestEqualValue(t *testing.T) {
 	}
 	if !equalValue(Value{Kind: KindList}, Value{Kind: KindList, Items: []Item{}}) {
 		t.Error("nil and empty lists are the same sample")
+	}
+}
+
+// The DEX spot is its own section, so a token without the grant yields no
+// sample rather than a row of zeros.
+func TestDexSectionLeaves(t *testing.T) {
+	rate, ok := LookupLeaf("dex.rate")
+	if !ok || rate.Kind != KindNumber || !rate.Integer || fmt.Sprint(rate.Operators) != "[crosses changes stalls]" {
+		t.Fatalf("dex.rate: %+v %v", rate, ok)
+	}
+	if host, ok := LookupLeaf("dex.host"); !ok || host.Kind != KindText {
+		t.Fatalf("dex.host: %+v %v", host, ok)
+	}
+	if premium, ok := LookupLeaf("dex.premium"); !ok || premium.Kind != KindNumber || premium.Integer {
+		t.Fatalf("dex.premium: %+v %v", premium, ok)
+	}
+	if _, ok := Resolve(&Snapshot{Reachable: true}, "dex.rate"); ok {
+		t.Fatal("no Dex section must be no sample")
+	}
+	v, ok := Resolve(&Snapshot{Reachable: true, Dex: &Dex{Rate: 19980}}, "dex.rate")
+	if !ok || v.Num != 19980 {
+		t.Fatalf("dex.rate resolved to %+v %v", v, ok)
 	}
 }

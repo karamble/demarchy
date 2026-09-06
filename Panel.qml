@@ -914,8 +914,9 @@ Panel {
             PriceSection {
               id: priceSection
               width: parent.width
-              visible: !!root.snap && !!root.snap.price
+              visible: !!root.snap && (!!root.snap.price || !!root.snap.dex)
               price: root.snap ? root.snap.price : null
+              dex: root.snap ? root.snap.dex : null
             }
             LightningSection {
               id: lightning

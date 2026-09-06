@@ -95,13 +95,25 @@ Everything below is what the panel already fetches: `wallet.*` is only fetched w
 
 <!-- catalogue:begin -->
 <!-- Generated from dcr.Catalogue() by make skill. Do not edit by hand: make lint fails when this is stale. -->
-58 paths. number and integer take crosses, changes, stalls. text and bool take becomes, stalls. A list of records takes appears, disappears, count and filters with --where on the fields shown; entries are the same entry when their identity fields match. A list of plain values takes count only.
+68 paths. number and integer take crosses, changes, stalls. text and bool take becomes, stalls. A list of records takes appears, disappears, count and filters with --where on the fields shown; entries are the same entry when their identity fields match. A list of plain values takes count only.
 
 ### br
 - `br.messages` list: appears, disappears, count. Fields: type, fromNick, text, gcid, gcName. Identity: type, fromNick, text, gcid
 - `br.nick` text: becomes, stalls
 - `br.notices` list: appears, disappears, count. Fields: id, ts, severity, subject, detail. Identity: id
 - `br.stage` text: becomes, stalls
+
+### dex
+- `dex.change24` number: crosses, changes, stalls
+- `dex.high24` integer: crosses, changes, stalls
+- `dex.host` text: becomes, stalls
+- `dex.low24` integer: crosses, changes, stalls
+- `dex.market` text: becomes, stalls
+- `dex.premium` number: crosses, changes, stalls
+- `dex.rate` integer: crosses, changes, stalls
+- `dex.rateUsd` number: crosses, changes, stalls
+- `dex.updated` text: becomes, stalls
+- `dex.volume24` number: crosses, changes, stalls
 
 ### lightning
 - `lightning.channels` integer: crosses, changes, stalls
@@ -174,4 +186,5 @@ Everything below is what the panel already fetches: `wallet.*` is only fetched w
 
 - Do not hand-edit `~/.config/demarchy/triggers.json`. The loader rejects unknown fields, so one typo makes the whole file unreadable and nothing in it is watched. Use `arm`, `edit` and `disarm`.
 - A trigger is evaluated only on the connection it was armed on. When the user switches the active connection it shows as `other-connection` and waits. `edit` cannot move it; disarm and arm again.
+- `dex.*` exists only with a DEX server registered in dcrpulse that carries a dcr_btc market; `dex.rate`, `dex.high24` and `dex.low24` are sats per DCR like `price.sats`, and `dex.premium` reads zero while the exchange feed is unavailable.
 - `lightning.list` holds only the 6 largest channels by capacity. A channel pushed out of the top 6 reads as a disappearance, and one that climbs into it reads as an appearance. `--where alias=<name>` keeps other channels from ringing you, but that channel still reads as gone if it drops out of the six.

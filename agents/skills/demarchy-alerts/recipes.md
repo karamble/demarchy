@@ -149,6 +149,26 @@ demarchy alarm t-7f3a9c21: lightning.list count below 2 where active=true on con
 
 Then read `lightning_channels` on dcrpulse and decide whether to open or reconnect.
 
+## crosses on the DEX premium: wake me when the DEX pays more
+
+Situation: DCR sometimes trades at a different price on DCRDEX than on the exchanges, and you want to hear when a DCR fetches two percent more on the DEX than the exchange feed implies.
+
+```bash
+demarchy-setup arm dex.premium crosses --above 2 --expires 7d --standing --reason "DCR fetches more on the DEX than on the exchange"
+```
+
+What fires it: `dex.premium` is the DCRDEX last trade against the exchange feed's implied DCR/BTC rate, in percent, and this rings on the sample that carries it from at or below 2 to above 2. It re-arms once the premium has been below 1.98 again, the bound less 1%. The premium reads zero while the exchange feed is unavailable, so a feed outage can look like a drop to zero.
+
+After it fires: standing, so it rings on each fresh crossing for seven days.
+
+What you receive:
+
+```
+demarchy alarm t-7f3a9c21: dex.premium crosses above 2 on connection "omarchy" fired at 2026-09-06T00:42:02Z. Reason: "DCR fetches more on the DEX than on the exchange". Armed by w7:p1 at 2026-09-05T22:10:00Z. This message carries no values; read dcrpulse yourself. It stays armed until 2026-09-12T22:10:00Z; disarm with: demarchy-setup disarm t-7f3a9c21.
+```
+
+Then read `dex_market_summary` and `dex_orderbook` on dcrpulse for the rate and the depth behind it before acting.
+
 ## Check first, then change or remove
 
 ```bash

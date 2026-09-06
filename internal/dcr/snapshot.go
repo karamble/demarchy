@@ -61,6 +61,7 @@ type Snapshot struct {
 	Wallet     *Wallet     `json:"wallet,omitempty"`
 	Lightning  *Lightning  `json:"lightning,omitempty"`
 	Price      *Price      `json:"price,omitempty"`
+	Dex        *Dex        `json:"dex,omitempty"`
 	Treasury   *Treasury   `json:"treasury,omitempty"`
 	BR         *BR         `json:"br,omitempty"`
 	Unread     Unread      `json:"unread"`
@@ -195,6 +196,28 @@ type Price struct {
 	Series []float64 `json:"series,omitempty"`
 	Change float64   `json:"change,omitempty"`
 	Market string    `json:"market,omitempty"`
+}
+
+// Dex is the DCRDEX DCR/BTC market as the client sees it: the one price a
+// trade actually clears at, beside the exchange feed in Price. Present only
+// with the dex grant, a registered server and a dcr_btc market; otherwise nil,
+// which the alerts read as no sample rather than as zeros.
+type Dex struct {
+	Host   string `json:"host"`
+	Market string `json:"market"`
+	// Rate is the last trade in sats per DCR, the unit Price.Sats uses, so the
+	// two read side by side. High24 and Low24 are in the same unit.
+	Rate     int64   `json:"rate"`
+	RateUsd  float64 `json:"rateUsd"`
+	Change24 float64 `json:"change24"` // percent over 24h
+	High24   int64   `json:"high24"`
+	Low24    int64   `json:"low24"`
+	Volume24 float64 `json:"volume24"` // DCR traded in 24h
+	// Premium is the DEX rate against the exchange feed's implied rate, in
+	// percent: how much more, or less, a DCR fetches on the DEX right now.
+	// Zero while the exchange feed is unavailable.
+	Premium float64 `json:"premium"`
+	Updated string  `json:"updated"` // RFC 3339, the last trade
 }
 
 // Treasury carries only the USD sum; the DCR balance is what produces it.
@@ -349,6 +372,9 @@ func Fetch(ctx context.Context, c *Client, opt FetchOptions) *Snapshot {
 	if opt.allows("bisonrelay") {
 		snap.Price = fetchPrice(ctx, c)
 		snap.BR = fetchBR(ctx, c, opt.Messages)
+	}
+	if opt.allows("dex") {
+		snap.Dex = fetchDex(ctx, c, snap.Price)
 	}
 	if opt.allows("treasury") {
 		snap.Treasury = fetchTreasury(ctx, c, snap.Price)
@@ -888,3 +914,66 @@ func downsample(in []float64, max int) []float64 {
 	}
 	return out
 }
+
+// fetchDex reads the DCR/BTC spot from the DEX client. The summary is public
+// market data the client already holds, so this costs no unlock and no round
+// trip to the server.
+func fetchDex(ctx context.Context, c *Client, price *Price) *Dex {
+	raw, err := c.Call(ctx, "dex_market_summary", nil)
+	if err != nil {
+		return nil
+	}
+	return parseDexSummary(raw, price)
+}
+
+// parseDexSummary picks the first dcr_btc market out of a dex_market_summary
+// reply. Rates arrive conventional, BTC per DCR, and leave as sats per DCR so
+// they sit beside Price.Sats; change24 arrives as a ratio and leaves as a
+// percent. The premium needs the exchange feed and is left at zero without it.
+func parseDexSummary(raw json.RawMessage, price *Price) *Dex {
+	var markets []struct {
+		Host        string  `json:"host"`
+		Market      string  `json:"market"`
+		BaseSymbol  string  `json:"baseSymbol"`
+		QuoteSymbol string  `json:"quoteSymbol"`
+		LastRate    float64 `json:"lastRate"`
+		LastRateUsd float64 `json:"lastRateUsd"`
+		Change24    float64 `json:"change24"`
+		High24      float64 `json:"high24"`
+		Low24       float64 `json:"low24"`
+		Vol24Base   float64 `json:"vol24Base"`
+		Stamp       int64   `json:"stamp"`
+	}
+	if json.Unmarshal(raw, &markets) != nil {
+		return nil
+	}
+	for _, m := range markets {
+		if !strings.EqualFold(m.BaseSymbol, "dcr") || !strings.EqualFold(m.QuoteSymbol, "btc") || m.LastRate <= 0 {
+			continue
+		}
+		d := &Dex{
+			Host:     m.Host,
+			Market:   m.Market,
+			Rate:     toSats(m.LastRate),
+			RateUsd:  m.LastRateUsd,
+			Change24: m.Change24 * 100,
+			High24:   toSats(m.High24),
+			Low24:    toSats(m.Low24),
+			Volume24: m.Vol24Base,
+		}
+		if d.Market == "" {
+			d.Market = "dcr_btc"
+		}
+		if m.Stamp > 0 {
+			d.Updated = time.UnixMilli(m.Stamp).UTC().Format(time.RFC3339)
+		}
+		if price != nil && price.Sats > 0 {
+			d.Premium = (float64(d.Rate)/price.Sats - 1) * 100
+		}
+		return d
+	}
+	return nil
+}
+
+// toSats turns a conventional BTC-per-DCR rate into whole sats per DCR.
+func toSats(conventional float64) int64 { return int64(math.Round(conventional * 1e8)) }

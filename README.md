@@ -213,7 +213,8 @@ code, so it cannot go stale.
 
 What can be watched is exactly what is in the panel: the ticket price and its
 window, your tickets, the node's height and peers, wallet balances, Lightning
-liquidity and channels, the DCR price, and Bison Relay messages. Five kinds of
+liquidity and channels, the DCR price, the DCRDEX spot and its premium over the
+exchange, and Bison Relay messages. Five kinds of
 condition: `crosses` a level, `becomes` a value, `changes` by an amount or
 percent, `stalls` for a duration, and `appears` or `disappears` from a list.
 Nothing costs an extra request; the widget is fetching it anyway.

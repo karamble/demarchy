@@ -51,7 +51,7 @@ var sections = []section{
 	{"wallet", "wallet balances (hidden until switched on)", false},
 	{"lightning", "channel inbound/outbound", false},
 	{"treasury", "the treasury value", false},
-	{"dex", "the DCR/BTC price chart, if a DEX server is registered", false},
+	{"dex", "the DCRDEX DCR/BTC spot and the price chart, if a DEX server is registered", false},
 }
 
 func requiredDomains() []string {
