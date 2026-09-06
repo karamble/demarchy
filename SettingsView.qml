@@ -40,6 +40,10 @@ Column {
   property int actionIndex: 0
   onCursorChanged: root.actionIndex = 0
 
+  // cancelForms drops a half-typed connection form. The panel calls it on
+  // close, so a form never lingers into the next open.
+  function cancelForms() { connectionsSettings.cancel() }
+
   readonly property bool formFocused: connectionsSettings.formFocused
 
   // The connection list is rendered here but owned by the panel, which is what

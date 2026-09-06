@@ -129,6 +129,27 @@ Panel {
       root.cursor = root.activeView.rowCount - 1
   }
 
+  // The cursor is a property, not focus, so the row holding it is found by
+  // asking: every row and add button carries hasCursor. The first hit walking
+  // down from the column is the row itself, since a row is checked before
+  // the buttons inside it.
+  function cursorItem(item) {
+    if (!item || !item.visible) return null
+    if (item.hasCursor === true) return item
+    var kids = item.children || []
+    for (var i = 0; i < kids.length; i++) {
+      var hit = root.cursorItem(kids[i])
+      if (hit) return hit
+    }
+    return null
+  }
+  function revealCursor() {
+    if (root.cursor < 0) return
+    flick.revealItem(root.cursorItem(column))
+  }
+  onCursorChanged: Qt.callLater(root.revealCursor)
+  onViewChanged: flick.contentY = 0
+
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property string helperPath: pluginDir + "/bin/demarchy"
 
@@ -496,8 +517,11 @@ Panel {
       root.markRead()
     } else {
       // Re-mask on close, so a revealed balance never survives into the next
-      // time the panel is opened.
+      // time the panel is opened; and drop any half-typed form for the same
+      // reason, or the next open lands in it with a dropdown holding focus.
       root.balancesRevealed = false
+      settingsView.cancelForms()
+      alertsView.list.cancel()
       root.setView("dashboard")
     }
   }
@@ -718,379 +742,434 @@ Panel {
         if (root.activeView && root.cursor >= 0) root.activeView.activateRow(root.cursor)
       }
 
-      Column {
-        id: column
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        spacing: Style.space(8)
+      // The card grows with its content up to the screen; past that the
+      // content scrolls instead of painting past the border, the way the
+      // shell's own list popups do. Wheel and touchpad move it, the keyboard
+      // cursor keeps its row in view, and a thin mark on the right says where
+      // you are while there is more.
+      Flickable {
+        id: flick
+        anchors.fill: parent
+        contentWidth: width
+        contentHeight: column.implicitHeight
+        interactive: contentHeight > height
+        boundsBehavior: Flickable.StopAtBounds
+        clip: true
 
-        // header. PanelHero is the stock title/pill/trailing-control row every
-        // first-party panel uses; the switch and the gear ride in its trailing
-        // slot, and the tooltip says what the switch will do.
-        PanelHero {
-          width: parent.width
-          title: "Demarchy"
-          foreground: Color.popups.text
-          iconSize: Style.font.title
-          // PanelHero's `detail` draws a bordered pill, which was the heaviest
-          // thing in a header that is otherwise borderless. A dot and a word in
-          // the trailing row say the same and sit quieter.
-          detail: ""
-          meta: root.reachable && root.snap ? Model.ago(root.snap.stamp, root.now) : ""
+        // reveal scrolls just far enough for the band y..y+h of the column
+        // to be inside the viewport, with a little air around it.
+        function reveal(y, h) {
+          var pad = Style.space(8)
+          var maxY = Math.max(0, contentHeight - height)
+          if (maxY === 0) { contentY = 0; return }
+          if (y < contentY + pad) contentY = Math.max(0, y - pad)
+          else if (y + h > contentY + height - pad) contentY = Math.min(maxY, y + h - height + pad)
+        }
+        // revealItem does the same for an item anywhere inside the column.
+        function revealItem(item) {
+          if (!item) return
+          var p = item
+          while (p && p !== column) p = p.parent
+          if (!p) return
+          var r = item.mapToItem(column, 0, 0)
+          reveal(r.y, item.height)
+        }
+        // A focused form field, reached by Tab, is kept in view the same way.
+        readonly property Item focused: Window.activeFocusItem
+        onFocusedChanged: Qt.callLater(function () { flick.revealItem(flick.focused) })
+        // Content that shrinks under the viewport must not leave a gap.
+        onContentHeightChanged: {
+          var maxY = Math.max(0, contentHeight - height)
+          if (contentY > maxY) contentY = maxY
+        }
 
-          iconComponent: Component {
-            DecredIcon { iconSize: Style.font.title; monochrome: false }
-          }
+        Column {
+          id: column
+          width: flick.width
+          spacing: Style.space(8)
 
-          trailingControl: Component {
-            Row {
-              spacing: Style.space(10)
+          // header. PanelHero is the stock title/pill/trailing-control row every
+          // first-party panel uses; the switch and the gear ride in its trailing
+          // slot, and the tooltip says what the switch will do.
+          PanelHero {
+            width: parent.width
+            title: "Demarchy"
+            foreground: Color.popups.text
+            iconSize: Style.font.title
+            // PanelHero's `detail` draws a bordered pill, which was the heaviest
+            // thing in a header that is otherwise borderless. A dot and a word in
+            // the trailing row say the same and sit quieter.
+            detail: ""
+            meta: root.reachable && root.snap ? Model.ago(root.snap.stamp, root.now) : ""
 
+            iconComponent: Component {
+              DecredIcon { iconSize: Style.font.title; monochrome: false }
+            }
+
+            trailingControl: Component {
               Row {
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(5)
+                spacing: Style.space(10)
 
-                Rectangle {
+                Row {
                   anchors.verticalCenter: parent.verticalCenter
-                  width: Style.space(6)
-                  height: width
-                  radius: width / 2
-                  color: root.statusColor
+                  spacing: Style.space(5)
+
+                  Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Style.space(6)
+                    height: width
+                    radius: width / 2
+                    color: root.statusColor
+                  }
+                  Text {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: Model.pill(root.effectiveMonitoring, root.reachable, root.errorCode).toLowerCase()
+                    textFormat: Text.PlainText
+                    color: root.statusColor
+                    opacity: 0.8
+                    font.family: Style.font.family
+                    font.pixelSize: Style.font.caption
+                  }
                 }
+
+                // The bell opens the alerts board the way the gear opens
+                // settings. It turns urgent for the one state the bar mark also
+                // shows: alerts armed while nothing is watching them.
                 Text {
                   anchors.verticalCenter: parent.verticalCenter
-                  text: Model.pill(root.effectiveMonitoring, root.reachable, root.errorCode).toLowerCase()
-                  textFormat: Text.PlainText
-                  color: root.statusColor
-                  opacity: 0.8
+                  text: "\uf0f3"
+                  color: (!root.effectiveMonitoring && root.armedCount > 0) ? Color.urgent : Color.popups.text
+                  opacity: root.view === "alerts" ? 0.9 : (bellHover.hovered ? 0.8 : 0.45)
                   font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
+                  font.pixelSize: Style.font.icon
+                  HoverHandler { id: bellHover; cursorShape: Qt.PointingHandCursor }
+                  TapHandler {
+                    onTapped: root.setView(root.view === "alerts" ? "dashboard" : "alerts")
+                  }
+                  PanelToolTip {
+                    visible: bellHover.hovered
+                    text: {
+                      if (root.view === "alerts") return "Back to status  (a)"
+                      if (!root.effectiveMonitoring && root.armedCount > 0)
+                        return "Alerts: " + root.armedCount + " armed, not watched  (a)"
+                      return "Alerts  (a)"
+                    }
+                  }
                 }
-              }
 
-              // The bell opens the alerts board the way the gear opens
-              // settings. It turns urgent for the one state the bar mark also
-              // shows: alerts armed while nothing is watching them.
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "\uf0f3"
-                color: (!root.effectiveMonitoring && root.armedCount > 0) ? Color.urgent : Color.popups.text
-                opacity: root.view === "alerts" ? 0.9 : (bellHover.hovered ? 0.8 : 0.45)
-                font.family: Style.font.family
-                font.pixelSize: Style.font.icon
-                HoverHandler { id: bellHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler {
-                  onTapped: root.setView(root.view === "alerts" ? "dashboard" : "alerts")
+                Text {
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "\uf013"
+                  color: Color.popups.text
+                  opacity: root.settingsOpen ? 0.9 : (gearHover.hovered ? 0.8 : 0.45)
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.icon
+                  HoverHandler { id: gearHover; cursorShape: Qt.PointingHandCursor }
+                  TapHandler {
+                    onTapped: root.setView(root.view === "settings" ? "dashboard" : "settings")
+                  }
+                  PanelToolTip {
+                    visible: gearHover.hovered
+                    text: root.settingsOpen ? "Back to status  (s)" : "Settings  (s)"
+                  }
                 }
-                PanelToolTip {
-                  visible: bellHover.hovered
-                  text: {
-                    if (root.view === "alerts") return "Back to status  (a)"
-                    if (!root.effectiveMonitoring && root.armedCount > 0)
-                      return "Alerts: " + root.armedCount + " armed, not watched  (a)"
-                    return "Alerts  (a)"
+
+                ToggleSwitch {
+                  id: monitorSwitch
+                  anchors.verticalCenter: parent.verticalCenter
+                  checked: root.effectiveMonitoring
+                  foreground: Color.popups.text
+                  onToggled: root.setMonitoring(!root.effectiveMonitoring)
+
+                  PanelToolTip {
+                    visible: monitorSwitch.containsMouse
+                    text: Model.switchHint(root.effectiveMonitoring) + "  (m)"
                   }
                 }
               }
-
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                text: "\uf013"
-                color: Color.popups.text
-                opacity: root.settingsOpen ? 0.9 : (gearHover.hovered ? 0.8 : 0.45)
-                font.family: Style.font.family
-                font.pixelSize: Style.font.icon
-                HoverHandler { id: gearHover; cursorShape: Qt.PointingHandCursor }
-                TapHandler {
-                  onTapped: root.setView(root.view === "settings" ? "dashboard" : "settings")
-                }
-                PanelToolTip {
-                  visible: gearHover.hovered
-                  text: root.settingsOpen ? "Back to status  (s)" : "Settings  (s)"
-                }
-              }
-
-              ToggleSwitch {
-                id: monitorSwitch
-                anchors.verticalCenter: parent.verticalCenter
-                checked: root.effectiveMonitoring
-                foreground: Color.popups.text
-                onToggled: root.setMonitoring(!root.effectiveMonitoring)
-
-                PanelToolTip {
-                  visible: monitorSwitch.containsMouse
-                  text: Model.switchHint(root.effectiveMonitoring) + "  (m)"
-                }
-              }
-            }
-          }
-        }
-
-        // an explanation whenever there is nothing good to draw
-        Text {
-          width: parent.width
-          visible: text !== "" && root.view === "dashboard"
-          wrapMode: Text.WordWrap
-          text: {
-            if (!root.effectiveMonitoring) return "Monitoring is off. The switch above turns it on."
-            if (root.helperMissing)
-              return "The helper is not built yet. In a terminal:\n\n"
-                     + "    cd " + root.pluginDir + " && make build\n\n"
-                     + "It needs Go 1.24 or newer, and builds nothing but the two "
-                     + "helpers in bin/."
-            if (root.errorCode !== "") return Model.errorLine(root.errorCode, root.snap ? root.snap.detail : "")
-            if (!root.snap) return "Connecting to dcrpulse…"
-            return ""
-          }
-          textFormat: Text.PlainText
-          color: Color.popups.text
-          opacity: 0.7
-          font.family: Style.font.family
-          font.pixelSize: Style.font.bodySmall
-        }
-
-        Text {
-          width: parent.width
-          visible: root.view === "dashboard" && root.errorCode !== "" && !!root.snap && root.snap.stamp > 0
-          text: "Last reached " + Model.ago(root.snap ? root.snap.stamp : 0, root.now)
-          textFormat: Text.PlainText
-          color: Color.popups.text
-          opacity: 0.45
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-        }
-
-        // ---- the hero spans the full width: it is the headline, and the
-        // three figures plus the curve want the room.
-        StakingHero {
-          id: hero
-          width: parent.width
-          visible: root.view === "dashboard" && root.reachable && !!root.snap && !!root.snap.staking
-          own: root.snap && root.snap.staking ? root.snap.staking.own : null
-          staking: root.snap ? root.snap.staking : null
-          now: root.now
-        }
-
-        PanelSeparator {
-          width: parent.width; foreground: Color.popups.text
-          visible: columns.visible
-        }
-
-        // ---- two columns. Each section still appears only when the snapshot
-        // carries its data, so a narrow grant simply leaves gaps rather than
-        // empty headings.
-        Row {
-          id: columns
-          width: parent.width
-          spacing: Style.space(20)
-          visible: root.view === "dashboard" && root.reachable && !!root.snap
-
-          Column {
-            id: leftColumn
-            width: (columns.width - columns.spacing) / 2
-            spacing: Style.space(10)
-
-            GovernanceSection {
-              width: parent.width
-              visible: !!root.snap && !!root.snap.staking
-              staking: root.snap ? root.snap.staking : null
-              price: root.snap ? root.snap.price : null
-              treasury: root.snap ? root.snap.treasury : null
-            }
-            NodeSection {
-              id: nodeSection
-              width: parent.width
-              visible: !!root.snap && !!root.snap.node
-              node: root.snap ? root.snap.node : null
             }
           }
 
-          Column {
-            id: rightColumn
-            width: (columns.width - columns.spacing) / 2
-            spacing: Style.space(10)
-
-            PriceSection {
-              id: priceSection
-              width: parent.width
-              visible: !!root.snap && (!!root.snap.price || !!root.snap.dex)
-              price: root.snap ? root.snap.price : null
-              dex: root.snap ? root.snap.dex : null
+          // an explanation whenever there is nothing good to draw
+          Text {
+            width: parent.width
+            visible: text !== "" && root.view === "dashboard"
+            wrapMode: Text.WordWrap
+            text: {
+              if (!root.effectiveMonitoring) return "Monitoring is off. The switch above turns it on."
+              if (root.helperMissing)
+                return "The helper is not built yet. In a terminal:\n\n"
+                       + "    cd " + root.pluginDir + " && make build\n\n"
+                       + "It needs Go 1.24 or newer, and builds nothing but the two "
+                       + "helpers in bin/."
+              if (root.errorCode !== "") return Model.errorLine(root.errorCode, root.snap ? root.snap.detail : "")
+              if (!root.snap) return "Connecting to dcrpulse…"
+              return ""
             }
-            LightningSection {
-              id: lightning
-              width: parent.width
-              visible: !!root.snap && !!root.snap.lightning
-              lightning: root.snap ? root.snap.lightning : null
-            }
-            WalletSection {
-              id: walletSection
-              width: parent.width
-              visible: root.showBalances && !!root.snap && !!root.snap.wallet
-              wallet: root.snap ? root.snap.wallet : null
-              revealed: root.balancesRevealed
-              onToggleReveal: root.balancesRevealed = !root.balancesRevealed
-            }
-          }
-        }
-
-        PanelSeparator {
-          width: parent.width; foreground: Color.popups.text
-          visible: brSection.visible
-        }
-        BRSection {
-          id: brSection
-          width: parent.width
-          visible: root.view === "dashboard" && root.reachable && !!root.snap && !!root.snap.br
-          br: root.snap ? root.snap.br : null
-          unread: root.snap ? root.snap.unread : null
-          messageLimit: 3
-        }
-
-        // ---- settings view
-        SettingsView {
-          id: settingsView
-          width: parent.width
-          cursor: root.cursor
-          visible: root.settingsOpen
-          monitoring: root.effectiveMonitoring
-          countPrivate: root.countPrivate
-          countGroupchat: root.countGroupchat
-          showBalances: root.showBalances
-          endpoint: root.endpoint
-          tokenState: root.tokenState
-          connections: root.connections
-          activeConnection: root.activeConnection
-          connResult: root.applyResult ? root.applyResult : root.connResult
-          plainHttp: root.plainHttp
-          configError: root.configError
-          onConnAdd: function (name, endpoint, token) {
-            root.applyConnection({ cmd: "addConnection", name: name, endpoint: endpoint, token: token })
-          }
-          onConnEdit: function (id, name, endpoint, token) {
-            root.applyConnection({ cmd: "editConnection", id: id, name: name, endpoint: endpoint, token: token })
-          }
-          onConnRemove: function (id, name) { root.askConfirm("connection", id, name) }
-          onFocusReleased: keyCatcher.forceActiveFocus()
-          onConnSwitch: function (id) { root.switchConnection(id) }
-          onChanged: function (key, value) {
-            if (key === "monitoring") root.setMonitoring(value)
-            else {
-              var patch = {}
-              patch[key] = value
-              root.persist(patch)
-            }
-          }
-          onRunSetup: {
-            setupProc.command = ["omarchy-launch-floating-terminal-with-presentation",
-                                 root.pluginDir + "/bin/demarchy-setup"]
-            setupProc.running = true
-          }
-        }
-
-        // ---- alerts view. The page arms, edits and disarms through the
-        // one-shot; disarming goes by way of the confirmation first.
-        AlertsView {
-          id: alertsView
-          width: parent.width
-          cursor: root.cursor
-          visible: root.view === "alerts"
-          triggers: root.triggers
-          catalogue: root.catalogue
-          triggersError: root.triggersError
-          monitoring: root.effectiveMonitoring
-          agentStates: root.agentStates
-          activeConnection: root.activeConnection
-          result: root.triggerResult
-          now: root.now
-          onArm: function (spec) { root.triggerCommand(Object.assign({ cmd: "arm" }, spec)) }
-          onEdit: function (id, spec) { root.triggerCommand(Object.assign({ cmd: "edit", id: id }, spec)) }
-          onDisarm: function (id, label) { root.askDisarm(id, label) }
-          onRefreshRequested: root.refreshAlerts()
-          onFocusReleased: keyCatcher.forceActiveFocus()
-        }
-
-        // ---- footer: which connection this is, and the keys
-        Item {
-          width: parent.width
-          implicitHeight: Math.max(connTrigger.implicitHeight, hintText.implicitHeight)
-
-          // The trigger, built by hand rather than from Button so it can carry
-          // the four-state fill and light up while its menu is open.
-          Item {
-            id: connTrigger
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-            visible: root.connections.length > 0
-            width: Math.min(parent.width * 0.55, connLabel.implicitWidth + Style.space(14))
-            implicitHeight: Style.space(20)
-
-            readonly property bool selected: connSwitcher.opened
-
-            Rectangle {
-              anchors.fill: parent
-              radius: Style.cornerRadius
-              color: connMouse.pressed
-                     ? Style.selectedFillFor(Color.popups.text, Color.accent)
-                     : (connTrigger.selected || connMouse.containsMouse
-                        ? Style.hoverFillFor(Color.popups.text, Color.accent) : "transparent")
-            }
-
-            Text {
-              id: connLabel
-              anchors.left: parent.left
-              anchors.leftMargin: Style.space(6)
-              anchors.right: parent.right
-              anchors.rightMargin: Style.space(6)
-              anchors.verticalCenter: parent.verticalCenter
-              text: "▴  " + (root.activeName !== "" ? root.activeName : "connection")
-              textFormat: Text.PlainText
-              elide: Text.ElideRight
-              color: Color.popups.text
-              opacity: connTrigger.selected || connMouse.containsMouse ? 0.9 : 0.5
-              font.family: Style.font.family
-              font.pixelSize: Style.font.caption
-            }
-
-            MouseArea {
-              id: connMouse
-              anchors.fill: parent
-              hoverEnabled: true
-              cursorShape: Qt.PointingHandCursor
-              onClicked: {
-                var scene = connTrigger.mapToGlobal(0, 0)
-                connSwitcher.openAt(scene.x, scene.y)
-              }
-            }
+            textFormat: Text.PlainText
+            color: Color.popups.text
+            opacity: 0.7
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
           }
 
           Text {
-            id: hintText
-            anchors.right: parent.right
-            anchors.left: connTrigger.visible ? connTrigger.right : parent.left
-            anchors.leftMargin: Style.space(10)
-            anchors.verticalCenter: parent.verticalCenter
-            horizontalAlignment: Text.AlignRight
-            // One legend per view.
-            text: {
-              if (root.view === "settings")
-                return "↑↓ row · ←→ action · enter do · s back · esc close"
-              if (root.view === "alerts")
-                return "↑↓ row · ←→ action · enter do · a back · esc close"
-              return "n connection · s settings · a alerts · m monitor" +
-                     (root.showBalances && root.reachable ? " · b reveal" : "") +
-                     " · r refresh"
-            }
+            width: parent.width
+            visible: root.view === "dashboard" && root.errorCode !== "" && !!root.snap && root.snap.stamp > 0
+            text: "Last reached " + Model.ago(root.snap ? root.snap.stamp : 0, root.now)
             textFormat: Text.PlainText
-            elide: Text.ElideLeft
             color: Color.popups.text
-            opacity: 0.35
+            opacity: 0.45
             font.family: Style.font.family
             font.pixelSize: Style.font.caption
           }
-        }
 
+          // ---- the hero spans the full width: it is the headline, and the
+          // three figures plus the curve want the room.
+          StakingHero {
+            id: hero
+            width: parent.width
+            visible: root.view === "dashboard" && root.reachable && !!root.snap && !!root.snap.staking
+            own: root.snap && root.snap.staking ? root.snap.staking.own : null
+            staking: root.snap ? root.snap.staking : null
+            now: root.now
+          }
+
+          PanelSeparator {
+            width: parent.width; foreground: Color.popups.text
+            visible: columns.visible
+          }
+
+          // ---- two columns. Each section still appears only when the snapshot
+          // carries its data, so a narrow grant simply leaves gaps rather than
+          // empty headings.
+          Row {
+            id: columns
+            width: parent.width
+            spacing: Style.space(20)
+            visible: root.view === "dashboard" && root.reachable && !!root.snap
+
+            Column {
+              id: leftColumn
+              width: (columns.width - columns.spacing) / 2
+              spacing: Style.space(10)
+
+              GovernanceSection {
+                width: parent.width
+                visible: !!root.snap && !!root.snap.staking
+                staking: root.snap ? root.snap.staking : null
+                price: root.snap ? root.snap.price : null
+                treasury: root.snap ? root.snap.treasury : null
+              }
+              NodeSection {
+                id: nodeSection
+                width: parent.width
+                visible: !!root.snap && !!root.snap.node
+                node: root.snap ? root.snap.node : null
+              }
+            }
+
+            Column {
+              id: rightColumn
+              width: (columns.width - columns.spacing) / 2
+              spacing: Style.space(10)
+
+              PriceSection {
+                id: priceSection
+                width: parent.width
+                visible: !!root.snap && (!!root.snap.price || !!root.snap.dex)
+                price: root.snap ? root.snap.price : null
+                dex: root.snap ? root.snap.dex : null
+              }
+              LightningSection {
+                id: lightning
+                width: parent.width
+                visible: !!root.snap && !!root.snap.lightning
+                lightning: root.snap ? root.snap.lightning : null
+              }
+              WalletSection {
+                id: walletSection
+                width: parent.width
+                visible: root.showBalances && !!root.snap && !!root.snap.wallet
+                wallet: root.snap ? root.snap.wallet : null
+                revealed: root.balancesRevealed
+                onToggleReveal: root.balancesRevealed = !root.balancesRevealed
+              }
+            }
+          }
+
+          PanelSeparator {
+            width: parent.width; foreground: Color.popups.text
+            visible: brSection.visible
+          }
+          BRSection {
+            id: brSection
+            width: parent.width
+            visible: root.view === "dashboard" && root.reachable && !!root.snap && !!root.snap.br
+            br: root.snap ? root.snap.br : null
+            unread: root.snap ? root.snap.unread : null
+            messageLimit: 3
+          }
+
+          // ---- settings view
+          SettingsView {
+            id: settingsView
+            width: parent.width
+            cursor: root.cursor
+            visible: root.settingsOpen
+            monitoring: root.effectiveMonitoring
+            countPrivate: root.countPrivate
+            countGroupchat: root.countGroupchat
+            showBalances: root.showBalances
+            endpoint: root.endpoint
+            tokenState: root.tokenState
+            connections: root.connections
+            activeConnection: root.activeConnection
+            connResult: root.applyResult ? root.applyResult : root.connResult
+            plainHttp: root.plainHttp
+            configError: root.configError
+            onConnAdd: function (name, endpoint, token) {
+              root.applyConnection({ cmd: "addConnection", name: name, endpoint: endpoint, token: token })
+            }
+            onConnEdit: function (id, name, endpoint, token) {
+              root.applyConnection({ cmd: "editConnection", id: id, name: name, endpoint: endpoint, token: token })
+            }
+            onConnRemove: function (id, name) { root.askConfirm("connection", id, name) }
+            onFocusReleased: keyCatcher.forceActiveFocus()
+            onConnSwitch: function (id) { root.switchConnection(id) }
+            onChanged: function (key, value) {
+              if (key === "monitoring") root.setMonitoring(value)
+              else {
+                var patch = {}
+                patch[key] = value
+                root.persist(patch)
+              }
+            }
+            onRunSetup: {
+              setupProc.command = ["omarchy-launch-floating-terminal-with-presentation",
+                                   root.pluginDir + "/bin/demarchy-setup"]
+              setupProc.running = true
+            }
+          }
+
+          // ---- alerts view. The page arms, edits and disarms through the
+          // one-shot; disarming goes by way of the confirmation first.
+          AlertsView {
+            id: alertsView
+            width: parent.width
+            cursor: root.cursor
+            visible: root.view === "alerts"
+            triggers: root.triggers
+            catalogue: root.catalogue
+            triggersError: root.triggersError
+            monitoring: root.effectiveMonitoring
+            agentStates: root.agentStates
+            activeConnection: root.activeConnection
+            result: root.triggerResult
+            now: root.now
+            onArm: function (spec) { root.triggerCommand(Object.assign({ cmd: "arm" }, spec)) }
+            onEdit: function (id, spec) { root.triggerCommand(Object.assign({ cmd: "edit", id: id }, spec)) }
+            onDisarm: function (id, label) { root.askDisarm(id, label) }
+            onRefreshRequested: root.refreshAlerts()
+            onFocusReleased: keyCatcher.forceActiveFocus()
+          }
+
+          // ---- footer: which connection this is, and the keys
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(connTrigger.implicitHeight, hintText.implicitHeight)
+
+            // The trigger, built by hand rather than from Button so it can carry
+            // the four-state fill and light up while its menu is open.
+            Item {
+              id: connTrigger
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+              visible: root.connections.length > 0
+              width: Math.min(parent.width * 0.55, connLabel.implicitWidth + Style.space(14))
+              implicitHeight: Style.space(20)
+
+              readonly property bool selected: connSwitcher.opened
+
+              Rectangle {
+                anchors.fill: parent
+                radius: Style.cornerRadius
+                color: connMouse.pressed
+                       ? Style.selectedFillFor(Color.popups.text, Color.accent)
+                       : (connTrigger.selected || connMouse.containsMouse
+                          ? Style.hoverFillFor(Color.popups.text, Color.accent) : "transparent")
+              }
+
+              Text {
+                id: connLabel
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(6)
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(6)
+                anchors.verticalCenter: parent.verticalCenter
+                text: "▴  " + (root.activeName !== "" ? root.activeName : "connection")
+                textFormat: Text.PlainText
+                elide: Text.ElideRight
+                color: Color.popups.text
+                opacity: connTrigger.selected || connMouse.containsMouse ? 0.9 : 0.5
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+              }
+
+              MouseArea {
+                id: connMouse
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: {
+                  var scene = connTrigger.mapToGlobal(0, 0)
+                  connSwitcher.openAt(scene.x, scene.y)
+                }
+              }
+            }
+
+            Text {
+              id: hintText
+              anchors.right: parent.right
+              anchors.left: connTrigger.visible ? connTrigger.right : parent.left
+              anchors.leftMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              horizontalAlignment: Text.AlignRight
+              // One legend per view.
+              text: {
+                if (root.view === "settings")
+                  return "↑↓ row · ←→ action · enter do · s back · esc close"
+                if (root.view === "alerts")
+                  return "↑↓ row · ←→ action · enter do · a back · esc close"
+                return "n connection · s settings · a alerts · m monitor" +
+                       (root.showBalances && root.reachable ? " · b reveal" : "") +
+                       " · r refresh"
+              }
+              textFormat: Text.PlainText
+              elide: Text.ElideLeft
+              color: Color.popups.text
+              opacity: 0.35
+              font.family: Style.font.family
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+        }
+      }
+
+      // The scroll mark: only while there is more than fits. It sits in the
+      // card's padding, just inside the border, rather than on the content's
+      // own edge where it would crowd the rows.
+      Rectangle {
+        anchors.right: parent.right
+        anchors.rightMargin: -(panel.padding - Style.space(3))
+        width: Style.space(2)
+        radius: width / 2
+        visible: flick.contentHeight > flick.height
+        y: flick.visibleArea.yPosition * flick.height
+        height: Math.max(Style.space(16), flick.visibleArea.heightRatio * flick.height)
+        color: Color.popups.text
+        opacity: 0.3
       }
     }
   }
