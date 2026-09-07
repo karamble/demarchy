@@ -20,6 +20,8 @@ your Lightning channels and Bison Relay.
 The mark lights up when new messages arrive in
 [Bison Relay](https://github.com/companyzero/bisonrelay), the zero-knowledge
 messenger built on Decred.
+A picture, a file or a Lightning invoice sent in a chat shows as an icon with
+its caption, filename or amount, never as the tag it travels in.
 
 ![preview](preview.png)
 

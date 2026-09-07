@@ -859,7 +859,7 @@ func ringToMessages(entries []ringEntry, limit int) []Message {
 		out = append(out, Message{
 			Type:     e.Type,
 			FromNick: e.Payload.FromNick,
-			Text:     e.Payload.Message,
+			Text:     foldMarkup(e.Payload.Message),
 			GCID:     e.Payload.GCID,
 		})
 	}
