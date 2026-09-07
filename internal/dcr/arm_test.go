@@ -31,6 +31,11 @@ func withConnection(t *testing.T) string {
 	return conn.ID
 }
 
+// armAt is the clock the persisted tests run on. It has to be the real one:
+// every save prunes spent and expired triggers against time.Now, so a fixed
+// date turns into a test that fails once retention has run out on it.
+var armAt = time.Now().UTC().Truncate(time.Second)
+
 func crossReq() ArmRequest {
 	return ArmRequest{
 		Path: "price.dcrUsd", Operator: "crosses",
@@ -41,14 +46,14 @@ func crossReq() ArmRequest {
 
 func TestArmBindsToTheActiveConnectionAndSeedsNothing(t *testing.T) {
 	home := withConnection(t)
-	tr, warnings, err := Arm(crossReq(), t0)
+	tr, warnings, err := Arm(crossReq(), armAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tr.Connection != home || tr.DeliverTo != You || tr.ArmedBy != You || !tr.IsOnce() || tr.Rev != 1 {
 		t.Fatalf("armed trigger: %+v", tr)
 	}
-	if !tr.ExpiresAt.Equal(t0.Add(96 * time.Hour)) {
+	if !tr.ExpiresAt.Equal(armAt.Add(96 * time.Hour)) {
 		t.Fatalf("expiry %v", tr.ExpiresAt)
 	}
 	if tr.State.LastValue != nil || tr.State.LastChangedAt != nil || !tr.State.Ready {
@@ -62,7 +67,7 @@ func TestArmBindsToTheActiveConnectionAndSeedsNothing(t *testing.T) {
 	if len(warnings) == 0 || !strings.Contains(warnings[0], "monitoring is off") {
 		t.Fatalf("warnings: %v", warnings)
 	}
-	if tr.View(t0, home, true).Status != "armed" {
+	if tr.View(armAt, home, true).Status != "armed" {
 		t.Fatal("a fresh trigger reads as armed before its first sample")
 	}
 }
@@ -71,7 +76,7 @@ func TestArmTakesAgentDetails(t *testing.T) {
 	withConnection(t)
 	req := crossReq()
 	req.DeliverTo, req.ArmedBy, req.Once = "w8:p1", "w8:p1", bp(false)
-	tr, _, err := Arm(req, t0)
+	tr, _, err := Arm(req, armAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +98,7 @@ func TestArmRefuses(t *testing.T) {
 	for why, tweak := range bad {
 		req := crossReq()
 		tweak(&req)
-		if _, _, err := Arm(req, t0); err == nil {
+		if _, _, err := Arm(req, armAt); err == nil {
 			t.Errorf("%s: should be refused", why)
 		}
 	}
@@ -116,7 +121,7 @@ func TestWalletPathWarnsWhileBalancesAreHidden(t *testing.T) {
 	}
 	req := crossReq()
 	req.Path = wallet
-	_, warnings, err := Arm(req, t0)
+	_, warnings, err := Arm(req, armAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +136,7 @@ func TestWalletPathWarnsWhileBalancesAreHidden(t *testing.T) {
 
 func TestEditBumpsRevAndResetsWhatItMust(t *testing.T) {
 	withConnection(t)
-	tr, _, err := Arm(crossReq(), t0)
+	tr, _, err := Arm(crossReq(), armAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +147,7 @@ func TestEditBumpsRevAndResetsWhatItMust(t *testing.T) {
 			return err
 		}
 		got, _ := list.Find(tr.ID)
-		fired := t0.Add(time.Minute)
+		fired := armAt.Add(time.Minute)
 		got.State.LastValue = []byte("17")
 		got.State.LastChangedAt = &fired
 		got.State.RefValue = []byte("15")
@@ -156,7 +161,7 @@ func TestEditBumpsRevAndResetsWhatItMust(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	edited, _, err := EditTrigger(tr.ID, ArmRequest{Params: Params{Bound: fp(18), Direction: "above"}}, t0.Add(2*time.Minute))
+	edited, _, err := EditTrigger(tr.ID, ArmRequest{Params: Params{Bound: fp(18), Direction: "above"}}, armAt.Add(2*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +181,7 @@ func TestEditBumpsRevAndResetsWhatItMust(t *testing.T) {
 
 	// A change of path drops the baseline: a stale number on a new path would
 	// be a false transition.
-	moved, _, err := EditTrigger(tr.ID, ArmRequest{Path: "node.height", Operator: "changes", Params: Params{By: fp(1)}}, t0.Add(3*time.Minute))
+	moved, _, err := EditTrigger(tr.ID, ArmRequest{Path: "node.height", Operator: "changes", Params: Params{By: fp(1)}}, armAt.Add(3*time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +190,7 @@ func TestEditBumpsRevAndResetsWhatItMust(t *testing.T) {
 	}
 
 	// An edit that would leave the trigger invalid changes nothing.
-	if _, _, err := EditTrigger(tr.ID, ArmRequest{Operator: "stalls"}, t0); err == nil {
+	if _, _, err := EditTrigger(tr.ID, ArmRequest{Operator: "stalls"}, armAt); err == nil {
 		t.Fatal("stalls without params.for should be refused")
 	}
 	if disk, _ := LoadTriggers(); disk.Triggers[0].Rev != 3 || disk.Triggers[0].Operator != "changes" {
@@ -195,7 +200,7 @@ func TestEditBumpsRevAndResetsWhatItMust(t *testing.T) {
 
 func TestEditAndDisarmUnknown(t *testing.T) {
 	withConnection(t)
-	if _, _, err := EditTrigger("t-00000000", ArmRequest{Reason: "x"}, t0); !errors.Is(err, ErrTriggerNotFound) {
+	if _, _, err := EditTrigger("t-00000000", ArmRequest{Reason: "x"}, armAt); !errors.Is(err, ErrTriggerNotFound) {
 		t.Fatalf("edit of unknown: %v", err)
 	}
 	if _, err := Disarm("t-00000000"); !errors.Is(err, ErrTriggerNotFound) {
@@ -205,7 +210,7 @@ func TestEditAndDisarmUnknown(t *testing.T) {
 
 func TestDisarmRemovesNow(t *testing.T) {
 	withConnection(t)
-	tr, _, err := Arm(crossReq(), t0)
+	tr, _, err := Arm(crossReq(), armAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,7 +230,7 @@ func TestDisarmRemovesNow(t *testing.T) {
 // preview would invite a later disarm of a trigger that never existed.
 func TestPrepareArmWritesNothing(t *testing.T) {
 	home := withConnection(t)
-	tr, warnings, err := PrepareArm(crossReq(), t0)
+	tr, warnings, err := PrepareArm(crossReq(), armAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,22 +243,22 @@ func TestPrepareArmWritesNothing(t *testing.T) {
 	if len(warnings) == 0 {
 		t.Fatal("warnings should still be reported on a dry run")
 	}
-	if _, _, err := PrepareArm(ArmRequest{Path: "price.moon", Operator: "crosses", Expires: "1h"}, t0); err == nil {
+	if _, _, err := PrepareArm(ArmRequest{Path: "price.moon", Operator: "crosses", Expires: "1h"}, armAt); err == nil {
 		t.Fatal("a dry run must validate as strictly as an arm")
 	}
 }
 
 func TestApplyEditIsPure(t *testing.T) {
-	fired := t0.Add(time.Minute)
+	fired := armAt.Add(time.Minute)
 	orig := Trigger{
 		ID: "t-0000abcd", Rev: 1, Connection: "c", Path: "price.dcrUsd", Operator: "crosses",
 		Params: Params{Bound: fp(16), Direction: "above"}, DeliverTo: You,
-		ExpiresAt: t0.Add(time.Hour), ArmedAt: t0, ArmedBy: You, Reason: "smoke",
+		ExpiresAt: armAt.Add(time.Hour), ArmedAt: armAt, ArmedBy: You, Reason: "smoke",
 		State: State{LastValue: []byte("17"), LastChangedAt: &fired, RefValue: []byte("15"),
 			FiredAt: &fired, FireCount: 1, Delivered: "agent"},
 	}
 	before := fmt.Sprintf("%+v", orig)
-	next, err := applyEdit(orig, ArmRequest{Params: Params{Bound: fp(18), Direction: "above"}}, t0)
+	next, err := applyEdit(orig, ArmRequest{Params: Params{Bound: fp(18), Direction: "above"}}, armAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,26 +270,26 @@ func TestApplyEditIsPure(t *testing.T) {
 		!st.Ready || st.Delivered != "" || string(st.LastValue) != "17" || st.LastChangedAt == nil {
 		t.Fatalf("edit result: %+v", next)
 	}
-	moved, err := applyEdit(orig, ArmRequest{Path: "node.height", Operator: "changes", Params: Params{By: fp(1)}}, t0)
+	moved, err := applyEdit(orig, ArmRequest{Path: "node.height", Operator: "changes", Params: Params{By: fp(1)}}, armAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if moved.State.LastValue != nil || moved.State.LastChangedAt != nil {
 		t.Fatalf("a path change must drop the baseline: %+v", moved.State)
 	}
-	if _, err := applyEdit(orig, ArmRequest{Operator: "stalls"}, t0); err == nil {
+	if _, err := applyEdit(orig, ArmRequest{Operator: "stalls"}, armAt); err == nil {
 		t.Fatal("stalls without params.for should be refused")
 	}
 }
 
 func TestPrepareEditWritesNothing(t *testing.T) {
 	withConnection(t)
-	tr, _, err := Arm(crossReq(), t0)
+	tr, _, err := Arm(crossReq(), armAt)
 	if err != nil {
 		t.Fatal(err)
 	}
 	was := mustRead(t, TriggersPath())
-	next, _, err := PrepareEdit(tr.ID, ArmRequest{Params: Params{Bound: fp(18), Direction: "above"}}, t0)
+	next, _, err := PrepareEdit(tr.ID, ArmRequest{Params: Params{Bound: fp(18), Direction: "above"}}, armAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +302,7 @@ func TestPrepareEditWritesNothing(t *testing.T) {
 	if disk, _ := LoadTriggers(); disk.Triggers[0].Rev != 1 {
 		t.Fatal("rev on disk moved")
 	}
-	if _, _, err := PrepareEdit("t-00000000", ArmRequest{}, t0); !errors.Is(err, ErrTriggerNotFound) {
+	if _, _, err := PrepareEdit("t-00000000", ArmRequest{}, armAt); !errors.Is(err, ErrTriggerNotFound) {
 		t.Fatalf("unknown id: %v", err)
 	}
 }
