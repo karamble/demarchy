@@ -5,6 +5,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import Quickshell
 import Quickshell.Io
 import qs.Commons
 import qs.Ui
@@ -284,7 +285,20 @@ Panel {
     onTriggered: if (root.effectiveMonitoring && !helperProc.running) helperProc.running = true
   }
 
-  Process { id: setupProc }
+  // Terminals are launched detached, never as a Process owned by this panel.
+  // Opening one takes the focus, focus loss closes the card, and closing the
+  // card would destroy the process and reap the terminal with it: it flashes up
+  // and dies partway through whatever it was asked to do. execDetached hands it
+  // to the session instead, which is what the bar's own run() does.
+  function runTerminal(command) {
+    Quickshell.execDetached(["omarchy-launch-floating-terminal-with-presentation", command])
+  }
+
+  // The helpers are compiled on the user's own machine, so a fresh clone has
+  // nothing to run. One button beats retyping the line.
+  function runBuild() {
+    root.runTerminal("cd " + root.pluginDir + " && make build")
+  }
 
   // Connection changes go to a one-shot helper, not to the running one. The
   // running helper only exists while monitoring is on, so routing them through
@@ -910,7 +924,8 @@ Panel {
             text: {
               if (!root.effectiveMonitoring) return "Monitoring is off. The switch above turns it on."
               if (root.helperMissing)
-                return "The helper is not built yet. In a terminal:\n\n"
+                return "The helper is not built yet. Demarchy ships source only, so "
+                       + "it is compiled once, here or in a terminal:\n\n"
                        + "    cd " + root.pluginDir + " && make build\n\n"
                        + "It needs Go 1.24 or newer, and builds nothing but the two "
                        + "helpers in bin/."
@@ -923,6 +938,19 @@ Panel {
             opacity: 0.7
             font.family: Style.font.family
             font.pixelSize: Style.font.bodySmall
+          }
+
+          // Offered rather than only described: this is the first thing a fresh
+          // clone needs, and the command above is a lot to retype.
+          Button {
+            visible: root.helperMissing && root.view === "dashboard"
+            text: "Build now"
+            bordered: true
+            foreground: Color.popups.text
+            accent: Color.accent
+            fontFamily: Style.font.family
+            fontSize: Style.font.bodySmall
+            onClicked: root.runBuild()
           }
 
           Text {
@@ -1071,11 +1099,7 @@ Panel {
                 root.persist(patch)
               }
             }
-            onRunSetup: {
-              setupProc.command = ["omarchy-launch-floating-terminal-with-presentation",
-                                   root.pluginDir + "/bin/demarchy-setup"]
-              setupProc.running = true
-            }
+            onRunSetup: root.runTerminal(root.pluginDir + "/bin/demarchy-setup")
           }
 
           // ---- alerts view. The page arms, edits and disarms through the
