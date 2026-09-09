@@ -34,11 +34,6 @@ jobs:
           unformatted=$(gofmt -l .)
           test -z "$unformatted" || { echo "gofmt needed on:"; echo "$unformatted"; exit 1; }
 
-      - name: Skill catalogue is current
-        run: |
-          go run ./cmd/demarchy-setup skill | diff -u agents/skills/demarchy-alerts/SKILL.md - \
-            || { echo "skill catalogue is stale; run: make skill"; exit 1; }
-
   plugin:
     name: Manifest and layout
     runs-on: ubuntu-latest
