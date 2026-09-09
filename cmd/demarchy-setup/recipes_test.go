@@ -32,8 +32,8 @@ var (
 // or a paraphrased alarm fails the build instead of misleading an agent.
 func TestRecipesParseValidateAndMatchFireText(t *testing.T) {
 	docs := map[string]string{}
-	for _, name := range []string{"SKILL.md", "recipes.md"} {
-		b, err := os.ReadFile(filepath.Join(skillSource, name))
+	for _, name := range []string{"alerts.md", "alert-recipes.md"} {
+		b, err := os.ReadFile(filepath.Join("..", "..", "docs", name))
 		if err != nil {
 			t.Fatal(err)
 		}

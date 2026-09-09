@@ -74,7 +74,7 @@ func main() {
   demarchy-setup list         list the stored connections
   demarchy-setup check        re-validate every stored connection
   demarchy-setup remove <id>  delete a connection and its token
-  demarchy-setup purge        delete every connection, the alerts board and the skill links
+  demarchy-setup purge        delete every connection and token, and the alerts board
 
   demarchy-setup catalogue    every value an alert can watch, with its operators
   demarchy-setup alerts       what is armed, grouped by who will hear it
@@ -82,16 +82,14 @@ func main() {
                               [--deliver <agent|you>] [--standing] [--connection <id>] [--dry-run]
   demarchy-setup edit <id> [same flags]
   demarchy-setup disarm <id>
-  demarchy-setup skill        print the agent skill; --recipes for the worked examples;
-                              --install links it where every agent harness looks, --uninstall unlinks
 
   Params by operator: --above X | --below X [--rearm R]; --value V [--hold 5m];
   --by X [--percent]; --for 45m; --where field=value (or field~=text) [--key field].
   Inside a herdr pane, arm delivers back to that agent unless --deliver says otherwise.
   --dry-run validates and prints the trigger as it would be stored, saving nothing.
 
-  Agents: SKIP if the demarchy-alerts skill is already in your context.
-  Otherwise run: demarchy-setup skill
+  Agents: run "demarchy-setup skill" for the full guide, --recipes for worked
+  examples. It prints; nothing is installed into your directories.
 
 Tokens are stored in %s, mode 0600; alerts in %s.
 `, dcr.ConnectionsPath(), dcr.TriggersPath())
@@ -114,8 +112,8 @@ func run(args []string) error {
 	if verb == "purge" {
 		return purge(args[1:])
 	}
-	// The skill prints from the binary alone, so a broken connection list
-	// never stops an agent from reading how to use this.
+	// The guide prints from the binary alone, so a broken connection list never
+	// stops an agent reading how to use this. Printing is all it does.
 	if verb == "skill" {
 		return skillVerb(args[1:])
 	}
@@ -181,16 +179,13 @@ func purge(args []string) error {
 			found = append(found, p)
 		}
 	}
-	// The skill links dangle once the plugin folder is gone, so they go too.
-	home, _ := os.UserHomeDir()
-	links := ourLinks(home)
-	if len(found) == 0 && len(links) == 0 {
+	if len(found) == 0 {
 		fmt.Println("Nothing stored; nothing to remove.")
 		return nil
 	}
 
-	fmt.Println("This deletes every stored connection and its token, the alerts board, and the agent skill links:")
-	for _, p := range append(append([]string{}, found...), links...) {
+	fmt.Println("This deletes every stored connection and its token, and the alerts board:")
+	for _, p := range found {
 		fmt.Println("   ", p)
 	}
 	fmt.Println()
@@ -217,11 +212,8 @@ func purge(args []string) error {
 	if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
 		_ = os.Remove(dir)
 	}
-	if home != "" {
-		if _, err := removeLinks(os.Stdout, home); err != nil {
-			return err
-		}
-	}
+	// Nothing to unlink: the guide is printed on request, never installed, so
+	// purge has only ever this plugin's own files to remove.
 	fmt.Println("Removed.")
 	return nil
 }

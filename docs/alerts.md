@@ -1,11 +1,10 @@
----
-name: demarchy-alerts
-description: "Arm, list, edit and disarm demarchy alerts: watches on a dcrpulse value (DCR price, ticket price, block height, wallet and Lightning balances, channels, Bison Relay messages) that wake this agent through herdr, or notify the user, when a condition trips. Use when the user asks to be told, woken, alerted or notified when a Decred value crosses a level, changes by an amount, stalls, or when a list entry appears or disappears; and when a message starting 'demarchy alarm' arrives in this session. Do not use to read current prices, balances or chain state (use the dcrpulse MCP), for timers or reminders unrelated to dcrpulse data, or to edit ~/.config/demarchy/triggers.json by hand."
----
-
 # Demarchy alerts
 
 Demarchy alerts are a passive monitor over the dcrpulse values the bar widget already shows: every beat, the helper folds the fresh snapshot through the triggers an agent armed and rings when a condition trips. It never answers a data question, never acts on anything, and the wake-up text carries no values. It rings by handing the alarm through herdr to whatever agent runs in the arming pane, retrying for 60 seconds while that agent is blocked on a dialog, and otherwise by raising a desktop notification to the user.
+
+This guide is printed by `demarchy-setup skill`, and `--recipes` prints the
+worked examples. It is never installed anywhere: nothing writes it into an
+agent's directories, so an agent reads it when it is asked to and not otherwise.
 
 ## Find the tool
 
@@ -87,117 +86,17 @@ A standing trigger ends instead with `It stays armed until <expiry>; disarm with
 
 ## Recipes
 
-Worked examples for every operator, with the exact text each one delivers, are in [`recipes.md`](recipes.md).
+Worked examples for every operator, with the exact text each one delivers, are in [`alert-recipes.md`](alert-recipes.md).
 
 ## Catalogue
 
-Everything below is what the panel already fetches: `wallet.*` is only fetched while showBalances is on, a list filters with `--where` on the fields shown and compares entries by the identity shown, and a path is bound to the connection that is active when it is armed.
+Every watchable path, with its kind and the operators it takes, comes from
+the binary itself so it cannot drift from what the code actually offers:
 
-<!-- catalogue:begin -->
-<!-- Generated from dcr.Catalogue() by make skill. Do not edit by hand: make lint fails when this is stale. -->
-81 paths. number and integer take crosses, changes, stalls. text and bool take becomes, stalls. A list of records takes appears, disappears, count and filters with --where on the fields shown; entries are the same entry when their identity fields match. A list of plain values takes count only.
-
-### audit
-- `audit.count` integer: crosses, changes, stalls
-- `audit.denied` integer: crosses, changes, stalls
-- `audit.entries` list: appears, disappears, count. Fields: time, agentId, agent, tool, amountDcr, target, result, detail. Identity: time, agentId, tool
-- `audit.last` text: becomes, stalls
-
-### br
-- `br.messages` list: appears, disappears, count. Fields: type, fromNick, text, gcid, gcName. Identity: type, fromNick, text, gcid
-- `br.nick` text: becomes, stalls
-- `br.notices` list: appears, disappears, count. Fields: id, ts, severity, subject, detail. Identity: id
-- `br.stage` text: becomes, stalls
-
-### brmcp
-- `brmcp.enabled` bool: becomes, stalls
-- `brmcp.error` text: becomes, stalls
-- `brmcp.lastDenied` text: becomes, stalls
-- `brmcp.mode` text: becomes, stalls
-- `brmcp.pending` list: appears, disappears, count. Fields: id, bot, botNick, tool, amountDcr, created, expiresAt. Identity: id
-- `brmcp.pendingCount` integer: crosses, changes, stalls
-- `brmcp.perDayCapDcr` number: crosses, changes, stalls
-- `brmcp.spend` list: appears, disappears, count. Fields: ts, bot, botNick, tool, rail, amountDcr, status, err. Identity: ts, bot, tool
-- `brmcp.todayDcr` number: crosses, changes, stalls
-
-### dex
-- `dex.change24` number: crosses, changes, stalls
-- `dex.high24` integer: crosses, changes, stalls
-- `dex.host` text: becomes, stalls
-- `dex.low24` integer: crosses, changes, stalls
-- `dex.market` text: becomes, stalls
-- `dex.premium` number: crosses, changes, stalls
-- `dex.rate` integer: crosses, changes, stalls
-- `dex.rateUsd` number: crosses, changes, stalls
-- `dex.updated` text: becomes, stalls
-- `dex.volume24` number: crosses, changes, stalls
-
-### lightning
-- `lightning.channels` integer: crosses, changes, stalls
-- `lightning.inbound` number: crosses, changes, stalls
-- `lightning.list` list: appears, disappears, count. Fields: alias, capacity, local, remote, active. Identity: alias
-- `lightning.onChain` number: crosses, changes, stalls
-- `lightning.outbound` number: crosses, changes, stalls
-- `lightning.peers` integer: crosses, changes, stalls
-- `lightning.pending` number: crosses, changes, stalls
-- `lightning.synced` bool: becomes, stalls
-
-### node
-- `node.height` integer: crosses, changes, stalls
-- `node.peers` integer: crosses, changes, stalls
-- `node.status` text: becomes, stalls
-- `node.syncMessage` text: becomes, stalls
-- `node.syncPhase` text: becomes, stalls
-- `node.syncProgress` number: crosses, changes, stalls
-- `node.version` text: becomes, stalls
-
-### price
-- `price.btcUsd` number: crosses, changes, stalls
-- `price.change` number: crosses, changes, stalls
-- `price.dcrUsd` number: crosses, changes, stalls
-- `price.market` text: becomes, stalls
-- `price.sats` number: crosses, changes, stalls
-- `price.series` list: count
-- `price.source` text: becomes, stalls
-- `price.updated` text: becomes, stalls
-
-### staking
-- `staking.blocksToChange` integer: crosses, changes, stalls
-- `staking.circulating` number: crosses, changes, stalls
-- `staking.estimatedMax` number: crosses, changes, stalls
-- `staking.estimatedMin` number: crosses, changes, stalls
-- `staking.hoursToChange` number: crosses, changes, stalls
-- `staking.lockedDcr` number: crosses, changes, stalls
-- `staking.nextTicketPrice` number: crosses, changes, stalls
-- `staking.own.bucketDays` integer: crosses, changes, stalls
-- `staking.own.hasHistory` bool: becomes, stalls
-- `staking.own.immature` integer: crosses, changes, stalls
-- `staking.own.lastVote` integer: crosses, changes, stalls
-- `staking.own.live` integer: crosses, changes, stalls
-- `staking.own.missed` integer: crosses, changes, stalls
-- `staking.own.poolShare` number: crosses, changes, stalls
-- `staking.own.revoked` integer: crosses, changes, stalls
-- `staking.own.reward` number: crosses, changes, stalls
-- `staking.own.unmined` integer: crosses, changes, stalls
-- `staking.own.voteBuckets` list: count
-- `staking.own.voted` integer: crosses, changes, stalls
-- `staking.own.vsp` text: becomes, stalls
-- `staking.participation` number: crosses, changes, stalls
-- `staking.poolSize` integer: crosses, changes, stalls
-- `staking.ticketPrice` number: crosses, changes, stalls
-- `staking.windowProgress` number: crosses, changes, stalls
-
-### treasury
-- `treasury.balanceDcr` number: crosses, changes, stalls
-- `treasury.balanceUsd` number: crosses, changes, stalls
-
-### wallet
-- `wallet.lockedByTickets` number: crosses, changes, stalls
-- `wallet.spendable` number: crosses, changes, stalls
-- `wallet.status` text: becomes, stalls
-- `wallet.synced` bool: becomes, stalls
-- `wallet.total` number: crosses, changes, stalls
-<!-- catalogue:end -->
+```bash
+demarchy-setup catalogue
+demarchy-setup catalogue --json
+```
 
 ## Limits
 

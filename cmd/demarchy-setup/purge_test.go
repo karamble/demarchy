@@ -5,18 +5,18 @@
 package main
 
 import (
-	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/karamble/demarchy/agents/skills"
 	"github.com/karamble/demarchy/internal/dcr"
 )
 
 // Purge is the documented first step of removing the plugin, so it has to take
-// the alerts board and the skill links with it, and nothing of anyone else's.
-func TestPurgeRemovesBoardAndSkillLinks(t *testing.T) {
+// this plugin's own files with it and nothing of anyone else's. It no longer
+// has links to chase: the alerts guide is printed on request, never installed,
+// so there is nothing of demarchy's outside its own config directory.
+func TestPurgeRemovesTheBoardAndNothingElse(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("HOME", home)
@@ -30,13 +30,13 @@ func TestPurgeRemovesBoardAndSkillLinks(t *testing.T) {
 			t.Fatalf("fixture: %v", err)
 		}
 	}
-	src := filepath.Join(t.TempDir(), "agents", "skills", skills.Name)
-	os.MkdirAll(src, 0o755)
-	if err := installLinks(io.Discard, home, src); err != nil {
+
+	// Somebody else's skill, which purge has no business touching and now has
+	// no code that could.
+	other := filepath.Join(home, ".claude", "skills", "other")
+	if err := os.MkdirAll(other, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	other := filepath.Join(home, ".claude", "skills", "other")
-	os.MkdirAll(other, 0o755)
 
 	if err := purge([]string{"--yes"}); err != nil {
 		t.Fatal(err)
@@ -46,13 +46,8 @@ func TestPurgeRemovesBoardAndSkillLinks(t *testing.T) {
 			t.Fatalf("%s survived purge: %v", p, err)
 		}
 	}
-	for _, rel := range harnessSkillDirs {
-		if _, err := os.Lstat(filepath.Join(home, rel, skills.Name)); !os.IsNotExist(err) {
-			t.Fatalf("%s: skill link survived purge", rel)
-		}
-	}
 	if _, err := os.Stat(other); err != nil {
-		t.Fatal("another skill was removed")
+		t.Fatal("purge reached outside its own config directory")
 	}
 	if err := purge([]string{"--yes"}); err != nil {
 		t.Fatalf("a second purge should find nothing: %v", err)

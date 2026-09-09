@@ -33,14 +33,15 @@ MCP interface, with a token that can only read.
 ```bash
 omarchy plugin add https://github.com/karamble/demarchy.git --enable
 cd ~/.config/omarchy/plugins/karamble.demarchy && make build
-bin/demarchy-setup skill --install    # once: teach your coding agents the alerts
 ```
 
 **The second line matters.** No binaries are shipped here, so the two small Go
 helpers are compiled on your own machine. It needs Go 1.24 or newer and builds
-nothing else. The panel tells you if you skip it. The third line links the
-agent skill (see Alerts) where every coding agent Omarchy supports looks for
-skills; skip it if no agent runs on this machine.
+nothing else. The panel says so if you skip it, and offers to run it for you.
+
+Nothing is installed outside this folder and `~/.config/demarchy`. If you want
+an agent to know how the alerts work, have it run `demarchy-setup skill`, which
+prints the guide; see Alerts.
 
 Then add a connection, flip the switch in the panel, and you are done.
 
@@ -128,14 +129,14 @@ terminal.
 ## Removing it
 
 ```bash
-demarchy-setup purge              # connections and tokens, the alerts board, the skill links
+demarchy-setup purge              # connections and tokens, and the alerts board
 omarchy plugin remove karamble.demarchy
 ```
 
 Do the purge first. Removing the plugin takes the plugin folder away but leaves
-`~/.config/demarchy/` behind, and what is in there is bearer tokens; it also
-leaves the agent skill links pointing at nothing, which purge removes. To drop
-only the skill links and keep the plugin, `demarchy-setup skill --uninstall`.
+`~/.config/demarchy/` behind, and what is in there is bearer tokens. Nothing
+else is left anywhere: demarchy writes nothing into your agents' directories, so
+there is nothing of its outside those two places to go looking for.
 
 Purging deletes them from this machine; it does not revoke them. If you want a
 token dead everywhere, delete its agent in the dcrpulse dashboard under
@@ -206,14 +207,14 @@ it. Run from a plain terminal, it delivers to you. Every alert expires, and each
 one rings once unless you pass `--standing`. `--dry-run` validates and prints
 the alert as it would be stored, without saving it.
 
-Agents learn all of this from a skill shipped in `agents/skills/demarchy-alerts`,
-laid out the way Omarchy ships its own. `demarchy-setup skill --install` links
-it where every agent harness Omarchy supports looks for skills (the install
-steps above include it, and `make install` runs it); the links point into the
-plugin folder, so an update reaches the agents by itself. `demarchy-setup skill`
-prints it, `--recipes` prints one worked example per condition, `--uninstall`
-takes the links away, and the path catalogue inside it is generated from the
-code, so it cannot go stale.
+Agents learn all of this by being told to read it. `demarchy-setup skill` prints
+the guide and `--recipes` prints one worked example per condition; both are in
+`docs/` for anyone reading the repository directly.
+
+It only prints. Nothing is written into `~/.claude/skills`, `~/.agents/skills`
+or anywhere else a coding agent looks, because a bar widget that quietly changes
+how every agent on the machine behaves is doing more than a bar widget should.
+An agent that wants the guide asks for it, the way it would ask for `--help`.
 
 What can be watched is exactly what is in the panel: the ticket price and its
 window, your tickets, the node's height and peers, wallet balances, Lightning

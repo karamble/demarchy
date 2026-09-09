@@ -1,6 +1,6 @@
 # Demarchy alert recipes
 
-One recipe per operator, each with the command, what makes it fire, what happens after, and the exact line the woken agent receives. Every sample text below uses the same fixed values: trigger id `t-7f3a9c21`, connection `omarchy`, armed by pane `w7:p1` at `2026-09-05T22:10:00Z`, fired at `2026-09-06T00:42:02Z`. A standing trigger's expiry is the arming time plus its `--expires` span. Find the tool as described in [`SKILL.md`](SKILL.md); the commands are written as plain `demarchy-setup`.
+One recipe per operator, each with the command, what makes it fire, what happens after, and the exact line the woken agent receives. Every sample text below uses the same fixed values: trigger id `t-7f3a9c21`, connection `omarchy`, armed by pane `w7:p1` at `2026-09-05T22:10:00Z`, fired at `2026-09-06T00:42:02Z`. A standing trigger's expiry is the arming time plus its `--expires` span. Find the tool as described in [`alerts.md`](alerts.md); the commands are written as plain `demarchy-setup`.
 
 ## crosses: wake me when the price passes a level
 
