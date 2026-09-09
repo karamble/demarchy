@@ -14,7 +14,13 @@ import (
 	"github.com/karamble/demarchy/internal/dcr"
 )
 
-var base = time.Date(2026, 9, 6, 12, 0, 0, 0, time.UTC)
+// base is the clock the board runs on. The board's own clock is fake and is
+// driven forward by hand, but base still has to sit near the wall clock,
+// because the store prunes on the real one: LoadTriggers calls Prune(time.Now())
+// and Expired compares against ExpiresAt. Pinned to a date, the fixtures below
+// aged out and took six tests with them two days later, on a commit that had
+// not changed.
+var base = time.Now().UTC().Truncate(time.Hour)
 
 type ringCall struct{ target, text string }
 
@@ -189,8 +195,12 @@ func TestRecoverReringsOnlyTheUndelivered(t *testing.T) {
 	if ring.count() != 1 || r.id != lost.ID {
 		t.Fatalf("recover rang %d times, result %+v", ring.count(), r)
 	}
-	if !strings.Contains(ring.calls[0].text, "fired at 2026-09-06T12:00:00Z") {
-		t.Fatalf("a recovered ring should carry the original time: %s", ring.calls[0].text)
+	// The time is derived rather than written out: the point of the assertion is
+	// that the ring carries the moment it originally fired, not that the fixture
+	// sits on any particular date.
+	want := "fired at " + base.Format(time.RFC3339)
+	if !strings.Contains(ring.calls[0].text, want) {
+		t.Fatalf("a recovered ring should carry the original time %q: %s", want, ring.calls[0].text)
 	}
 }
 
