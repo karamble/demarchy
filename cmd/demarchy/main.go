@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -173,6 +174,60 @@ type session struct {
 
 	// alarms is the trigger board; nil in the one-shots, which never evaluate.
 	alarms *alarms
+
+	// grantChecked is when the token was last asked what it may read. The grant
+	// is configuration, and configuration read once at startup and never again
+	// is configuration that cannot be changed: widening a token in dcrpulse
+	// used to need the helper restarted before the new sections appeared, with
+	// nothing saying so.
+	grantChecked time.Time
+}
+
+// grantEvery is how often the token is re-asked what it may read. A round trip,
+// against a grant that rarely moves: far below how long anyone would sit
+// wondering why a section is missing, far above what it costs.
+const grantEvery = 5 * time.Minute
+
+// sameDomains reports whether two grants say the same thing. Order is not
+// meaning: a server listing the same domains differently has not changed.
+func sameDomains(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	x, y := slices.Clone(a), slices.Clone(b)
+	slices.Sort(x)
+	slices.Sort(y)
+	return slices.Equal(x, y)
+}
+
+// recheckGrant re-asks what the token may read, and widens or narrows what is
+// fetched to match. It deliberately does not rebuild the session: only the
+// domain list changes, and rebuilding would drop the subscription stream that
+// resync is otherwise careful to keep.
+//
+// A failed check keeps the domains already in hand. Losing sections because one
+// call timed out would be worse than noticing a new one late.
+func (s *session) recheckGrant(ctx context.Context, now time.Time) {
+	if s.client == nil || s.conn == nil {
+		return
+	}
+	if !s.grantChecked.IsZero() && now.Sub(s.grantChecked) < grantEvery {
+		return
+	}
+	s.grantChecked = now
+
+	capsCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	caps, err := s.client.Capabilities(capsCtx)
+	cancel()
+	if err != nil {
+		return
+	}
+	if sameDomains(caps.Domains, s.opt.Domains) {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "grant changed: %s -> %s\n",
+		strings.Join(s.opt.Domains, ","), strings.Join(caps.Domains, ","))
+	s.opt.Domains = caps.Domains
 }
 
 // connID is the id triggers are bound to, or "" before a connection is chosen.
@@ -239,6 +294,9 @@ func (s *session) resync(ctx context.Context) bool {
 		s.conn = conn
 	}
 	if s.fingerprint() == s.built {
+		// Nothing the client was built from has moved, but the grant behind it
+		// may have: it lives in dcrpulse, not in any file here.
+		s.recheckGrant(ctx, time.Now())
 		return false
 	}
 	id := s.conn.ID
@@ -292,6 +350,7 @@ func (s *session) use(ctx context.Context, id string) error {
 		return err
 	}
 	s.opt.Domains = caps.Domains
+	s.grantChecked = time.Now()
 	return nil
 }
 

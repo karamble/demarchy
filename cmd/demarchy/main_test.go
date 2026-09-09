@@ -105,3 +105,44 @@ func TestResetKeepsTheBaseline(t *testing.T) {
 		t.Fatalf("after reset an unchanged ring counted %d, want 0", got)
 	}
 }
+
+// TestSameDomains pins what counts as the grant changing. Order is not meaning:
+// a server that lists the same domains differently has not widened anything,
+// and treating that as a change would refetch the world on every pass.
+func TestSameDomains(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b []string
+		same bool
+	}{
+		{"identical", []string{"node", "price"}, []string{"node", "price"}, true},
+		{"reordered", []string{"price", "node"}, []string{"node", "price"}, true},
+		{"a domain was granted", []string{"node"}, []string{"node", "wallet"}, false},
+		{"a domain was revoked", []string{"node", "wallet"}, []string{"node"}, false},
+		{"swapped, same count", []string{"node", "wallet"}, []string{"node", "price"}, false},
+		{"both empty", nil, nil, true},
+		{"empty gains one", nil, []string{"node"}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sameDomains(tt.a, tt.b); got != tt.same {
+				t.Errorf("sameDomains(%v, %v) = %v, want %v", tt.a, tt.b, got, tt.same)
+			}
+			// The question is symmetric, and a caller may pass either order.
+			if got := sameDomains(tt.b, tt.a); got != tt.same {
+				t.Errorf("sameDomains(%v, %v) = %v, want %v (not symmetric)", tt.b, tt.a, got, tt.same)
+			}
+		})
+	}
+}
+
+// TestSameDomainsDoesNotMutate guards the sort: the grant in hand is live
+// configuration, and reordering it under the fetch would be a real bug.
+func TestSameDomainsDoesNotMutate(t *testing.T) {
+	held := []string{"wallet", "node", "price"}
+	sameDomains(held, []string{"node"})
+	if held[0] != "wallet" || held[1] != "node" || held[2] != "price" {
+		t.Errorf("the caller's slice was reordered: %v", held)
+	}
+}
