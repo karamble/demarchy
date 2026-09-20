@@ -1,16 +1,41 @@
 PLUGIN_ID := karamble.demarchy
 DEST      := $(HOME)/.config/omarchy/plugins/$(PLUGIN_ID)
+GO        ?= go
 
-.PHONY: all build install lint test clean
+.PHONY: all build install lint test clean toolchain
 
 
 all: build
 
 # Both binaries together: a connections.json carrying a plain-http exception is
 # written as version 2, and a helper older than the wizard refuses to read it.
-build:
-	go build -trimpath -o bin/demarchy       ./cmd/demarchy
-	go build -trimpath -o bin/demarchy-setup ./cmd/demarchy-setup
+build: toolchain
+	$(GO) build -trimpath -o bin/demarchy       ./cmd/demarchy
+	$(GO) build -trimpath -o bin/demarchy-setup ./cmd/demarchy-setup
+
+# Building from source needs Go, and the most common way to miss it on Omarchy
+# is having it under mise without the shell activated. Say which case it is.
+toolchain:
+	@command -v $(GO) >/dev/null 2>&1 && exit 0; \
+	echo "Demarchy builds from source and the Go toolchain is not on PATH."; \
+	echo; \
+	if command -v mise >/dev/null 2>&1 && mise which go >/dev/null 2>&1; then \
+		echo "  mise has Go, but this shell cannot see it. Open a new terminal and"; \
+		echo "  press Build again, or build against it directly:"; \
+		echo; \
+		echo "      make GO=$$(mise which go)"; \
+	elif command -v mise >/dev/null 2>&1; then \
+		echo "  Omarchy ships mise, so the shortest way is:"; \
+		echo; \
+		echo "      mise use -g go@latest"; \
+		echo; \
+		echo "  then open a new terminal and press Build again."; \
+	else \
+		echo "      sudo pacman -S go"; \
+	fi; \
+	echo; \
+	echo "Go $(shell sed -n 's/^go \([0-9.]*\)$$/\1/p' go.mod) or newer is needed."; \
+	exit 1
 
 # rsync rather than a symlink: the shell rejects symlinks anywhere inside a
 # plugin directory.

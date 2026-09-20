@@ -68,6 +68,9 @@ Panel {
   // a first-time install lands in, and it needs to say so rather than sit on
   // "connecting" for ever.
   property bool helperMissing: false
+  // True when a source file is newer than the built helper, which is what an
+  // update leaves behind: bin/ survives and goes stale.
+  property bool helperStale: false
 
   readonly property bool reachable: !!snap && snap.reachable === true
   readonly property string errorCode: snap && snap.error ? String(snap.error) : ""
@@ -268,11 +271,30 @@ Panel {
     running: false
     onExited: function (code) {
       root.helperMissing = code !== 0
+      if (code === 0) staleProbe.running = true
       // With monitoring off nothing else ever reads the triggers file, and the
       // bar has to know whether anything armed is going unwatched. Only once
       // the helper is known to exist: a missing binary logs a warning per
       // attempt and answers nothing.
       if (code === 0 && !root.effectiveMonitoring) root.triggerCommand({ cmd: "list" })
+    }
+  }
+
+  // An update fast-forwards the checkout and leaves bin/ alone, so the helper
+  // keeps running the previous build while everything looks healthy. Compare
+  // source against the binary rather than asking git, so a local edit reads
+  // the same as an update. Test files are left out: they never reach the
+  // binary. The module files are counted: a dependency change does.
+  Process {
+    id: staleProbe
+    running: false
+    command: ["/usr/bin/find", root.pluginDir,
+              "(", "-name", "*.go", "-not", "-name", "*_test.go",
+              "-o", "-name", "go.mod", "-o", "-name", "go.sum", ")",
+              "-newer", root.helperPath, "-print", "-quit"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.helperStale = String(text || "").trim().length > 0
     }
   }
 
@@ -298,6 +320,14 @@ Panel {
   // nothing to run. One button beats retyping the line.
   function runBuild() {
     root.runTerminal("cd " + root.pluginDir + " && make build")
+  }
+
+  // A stale helper is not a missing one: the old binary is already running and
+  // the panel already has its views, so compiling alone changes nothing on
+  // screen. Restart the shell after the build, which is what replaces it.
+  function runRebuild() {
+    root.runTerminal("cd " + root.pluginDir + " && make build"
+                     + " && /usr/share/omarchy/bin/omarchy-restart-shell")
   }
 
   // Connection changes go to a one-shot helper, not to the running one. The
@@ -951,6 +981,29 @@ Panel {
             fontFamily: Style.font.family
             fontSize: Style.font.bodySmall
             onClicked: root.runBuild()
+          }
+
+          // An update leaves bin/ behind, and nothing else says so.
+          Text {
+            width: parent.width
+            visible: root.helperStale && !root.helperMissing && root.view === "dashboard"
+            wrapMode: Text.WordWrap
+            textFormat: Text.PlainText
+            text: "The helper is older than the source. Rebuild it, or it keeps running the previous version."
+            color: Color.accent
+            font.family: Style.font.family
+            font.pixelSize: Style.font.bodySmall
+          }
+
+          Button {
+            visible: root.helperStale && !root.helperMissing && root.view === "dashboard"
+            text: "Rebuild"
+            bordered: true
+            foreground: Color.popups.text
+            accent: Color.accent
+            fontFamily: Style.font.family
+            fontSize: Style.font.bodySmall
+            onClicked: root.runRebuild()
           }
 
           Text {
