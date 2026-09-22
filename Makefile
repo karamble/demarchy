@@ -15,6 +15,9 @@ all: build
 # there is no second program to keep in step with the first.
 build: toolchain
 	$(GO) build -trimpath -o bin/demarchy ./cmd/demarchy
+	@# An update leaves bin/ alone, so the binary from before the merge would
+	@# survive here and keep answering with the code it was built from.
+	@rm -f bin/demarchy-setup
 
 # The FAQ the toolchain preflight points at. Install instructions belong in
 # documentation a person can read and correct, not in a build target.
