@@ -22,8 +22,8 @@ func mustLeaf(t *testing.T, path string) Leaf {
 	return l
 }
 
-// The catalogue is what an agent reads to learn what it may arm, so these are
-// the shapes the CLI documentation promises.
+// The catalogue is how a caller discovers what may be armed, so these are the
+// shapes the CLI documentation promises.
 func TestCatalogueShapes(t *testing.T) {
 	number := []string{"crosses", "changes", "stalls"}
 	scalar := []string{"becomes", "stalls"}

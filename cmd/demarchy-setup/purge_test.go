@@ -13,9 +13,9 @@ import (
 )
 
 // Purge is the documented first step of removing the plugin, so it has to take
-// this plugin's own files with it and nothing of anyone else's. It no longer
-// has links to chase: the alerts guide is printed on request, never installed,
-// so there is nothing of demarchy's outside its own config directory.
+// this plugin's own files with it and nothing of anyone else's. demarchy writes
+// only inside its own config directory, so that is the whole of what purge has
+// to find.
 func TestPurgeRemovesTheBoardAndNothingElse(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -31,9 +31,9 @@ func TestPurgeRemovesTheBoardAndNothingElse(t *testing.T) {
 		}
 	}
 
-	// Somebody else's skill, which purge has no business touching and now has
-	// no code that could.
-	other := filepath.Join(home, ".claude", "skills", "other")
+	// Somebody else's file under the same home, which purge has no business
+	// touching and no code that could.
+	other := filepath.Join(home, ".config", "elsewhere", "keep")
 	if err := os.MkdirAll(other, 0o755); err != nil {
 		t.Fatal(err)
 	}

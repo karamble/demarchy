@@ -39,9 +39,7 @@ cd ~/.config/omarchy/plugins/karamble.demarchy && make build
 helpers are compiled on your own machine. It needs Go 1.24 or newer and builds
 nothing else. The panel says so if you skip it, and offers to run it for you.
 
-Nothing is installed outside this folder and `~/.config/demarchy`. If you want
-an agent to know how the alerts work, have it run `demarchy-setup skill`, which
-prints the guide; see Alerts.
+Nothing is installed outside this folder and `~/.config/demarchy`.
 
 Then add a connection, flip the switch in the panel, and you are done.
 
@@ -52,9 +50,8 @@ omarchy plugin update karamble.demarchy
 cd ~/.config/omarchy/plugins/karamble.demarchy && make build
 ```
 
-The update is a git pull inside the plugin folder, so the agent skill follows
-it by itself: the links point into that folder. The two binaries are built
-locally and need the second line every time.
+The update is a git pull inside the plugin folder. The two binaries are built
+locally, so the second line is needed every time.
 
 ## Connections
 
@@ -135,8 +132,8 @@ omarchy plugin remove karamble.demarchy
 
 Do the purge first. Removing the plugin takes the plugin folder away but leaves
 `~/.config/demarchy/` behind, and what is in there is bearer tokens. Nothing
-else is left anywhere: demarchy writes nothing into your agents' directories, so
-there is nothing of its outside those two places to go looking for.
+else is left anywhere: demarchy writes only inside those two places, so there is
+nothing else to go looking for.
 
 Purging deletes them from this machine; it does not revoke them. If you want a
 token dead everywhere, delete its agent in the dcrpulse dashboard under
@@ -207,14 +204,9 @@ it. Run from a plain terminal, it delivers to you. Every alert expires, and each
 one rings once unless you pass `--standing`. `--dry-run` validates and prints
 the alert as it would be stored, without saving it.
 
-Agents learn all of this by being told to read it. `demarchy-setup skill` prints
-the guide and `--recipes` prints one worked example per condition; both are in
-`docs/` for anyone reading the repository directly.
-
-It only prints. Nothing is written into `~/.claude/skills`, `~/.agents/skills`
-or anywhere else a coding agent looks, because a bar widget that quietly changes
-how every agent on the machine behaves is doing more than a bar widget should.
-An agent that wants the guide asks for it, the way it would ask for `--help`.
+`demarchy-setup --help` lists every verb and the parameters each operator
+takes, and `demarchy-setup catalogue` prints every watchable path with its kind
+and operators, generated from the source so it cannot go stale.
 
 What can be watched is exactly what is in the panel: the ticket price and its
 window, your tickets, the node's height and peers, wallet balances, Lightning

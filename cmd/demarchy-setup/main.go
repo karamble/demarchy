@@ -88,9 +88,6 @@ func main() {
   Inside a herdr pane, arm delivers back to that agent unless --deliver says otherwise.
   --dry-run validates and prints the trigger as it would be stored, saving nothing.
 
-  Agents: run "demarchy-setup skill" for the full guide, --recipes for worked
-  examples. It prints; nothing is installed into your directories.
-
 Tokens are stored in %s, mode 0600; alerts in %s.
 `, dcr.ConnectionsPath(), dcr.TriggersPath())
 	}
@@ -111,11 +108,6 @@ func run(args []string) error {
 	// when the file itself is what is broken.
 	if verb == "purge" {
 		return purge(args[1:])
-	}
-	// The guide prints from the binary alone, so a broken connection list never
-	// stops an agent reading how to use this. Printing is all it does.
-	if verb == "skill" {
-		return skillVerb(args[1:])
 	}
 	// Alerts have their own file, so a broken connection list never stops one
 	// being listed or disarmed. Arming binds to a connection and reads the
@@ -212,8 +204,6 @@ func purge(args []string) error {
 	if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
 		_ = os.Remove(dir)
 	}
-	// Nothing to unlink: the guide is printed on request, never installed, so
-	// purge has only ever this plugin's own files to remove.
 	fmt.Println("Removed.")
 	return nil
 }
