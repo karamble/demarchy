@@ -70,7 +70,7 @@ func TestFireTextCarriesNoValue(t *testing.T) {
 	tr.Reason = ""
 	text = FireText(tr, t0)
 	if !strings.Contains(text, "stays armed until 2026-10-06T12:00:00Z") ||
-		!strings.Contains(text, "demarchy-setup disarm "+tr.ID) {
+		!strings.Contains(text, "demarchy disarm "+tr.ID) {
 		t.Errorf("standing text should say how to disarm:\n%s", text)
 	}
 	if strings.Contains(text, "Reason") {

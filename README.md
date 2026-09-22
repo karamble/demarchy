@@ -35,8 +35,8 @@ omarchy plugin add https://github.com/karamble/demarchy.git --enable
 cd ~/.config/omarchy/plugins/karamble.demarchy && make build
 ```
 
-**The second line matters.** No binaries are shipped here, so the two small Go
-helpers are compiled on your own machine. It needs Go 1.24 or newer and builds
+**The second line matters.** No binary is shipped here, so the small Go
+helper is compiled on your own machine. It needs Go 1.24 or newer and builds
 nothing else. The panel says so if you skip it, and offers to run it for you.
 
 Nothing is installed outside this folder and `~/.config/demarchy`.
@@ -50,7 +50,7 @@ omarchy plugin update karamble.demarchy
 cd ~/.config/omarchy/plugins/karamble.demarchy && make build
 ```
 
-The update is a git pull inside the plugin folder. The two binaries are built
+The update is a git pull inside the plugin folder. The binary is built
 locally, so the second line is needed every time.
 
 ## Connections
@@ -61,10 +61,10 @@ you like: the active one is named in the panel footer, and `n` opens the list.
 Add, edit and remove them in **Settings → Connections**, or from a terminal:
 
 ```bash
-demarchy-setup              # add one
-demarchy-setup list         # what is stored
-demarchy-setup check        # re-validate them
-demarchy-setup remove vps   # delete one and its token
+demarchy add         # add one
+demarchy list        # what is stored
+demarchy check       # re-validate them
+demarchy remove vps  # delete one and its token
 ```
 
 They live in `~/.config/demarchy/connections.json` at mode 0600.
@@ -77,9 +77,9 @@ what https would. It is off unless you turn it on, it lives in the config file
 rather than the settings page, and it is narrow on purpose:
 
 ```bash
-demarchy-setup allow-http 100.83.12.7/32 --via wt0
-demarchy-setup allow-http acekool.blacknet.internal
-demarchy-setup disallow-http 100.83.12.7/32
+demarchy allow-http 100.83.12.7/32 --via wt0
+demarchy allow-http acekool.blacknet.internal
+demarchy disallow-http 100.83.12.7/32
 ```
 
 Only carrier-grade NAT addresses, `100.64.0.0/10`, which is what mesh software
@@ -126,7 +126,7 @@ terminal.
 ## Removing it
 
 ```bash
-demarchy-setup purge              # connections and tokens, and the alerts board
+demarchy purge  # connections and tokens, and the alerts board
 omarchy plugin remove karamble.demarchy
 ```
 
@@ -156,7 +156,7 @@ the dashboard makes a section appear on its own.
 | `audit` | MCP Audit: what every agent did with money, newest first |
 | `brmcp` | BRMCP: bot payments waiting for your approval, and the bridge spend log |
 
-`node` and `staking` are the two you really want. `demarchy-setup check` tells
+`node` and `staking` are the two you really want. `demarchy check` tells
 you what your actual token unlocks.
 
 ## Settings
@@ -184,13 +184,13 @@ never answers a question about live data, and it never acts on anything. It
 watches, remembers what is armed, and rings. That is the whole job, on purpose.
 
 ```bash
-demarchy-setup catalogue                                    # what can be watched
-demarchy-setup arm price.dcrUsd crosses --above 16 \
-    --expires 4d --reason "sell leg of the rebalance"      # arm one
-demarchy-setup alerts                                       # what is armed
-demarchy-setup edit t-7f3a9c21 --above 17 --expires 2d      # change one in place
-demarchy-setup arm node.height stalls --for 45m --expires 2d --dry-run   # check, save nothing
-demarchy-setup disarm t-7f3a9c21
+demarchy catalogue                                                # what can be watched
+demarchy arm price.dcrUsd crosses --above 16 \
+    --expires 4d --reason "sell leg of the rebalance"             # arm one
+demarchy alerts                                                   # what is armed
+demarchy edit t-7f3a9c21 --above 17 --expires 2d                  # change one in place
+demarchy arm node.height stalls --for 45m --expires 2d --dry-run  # check, save nothing
+demarchy disarm t-7f3a9c21
 ```
 
 Every verb takes `--json` for a machine. Params by operator: `--above X` or
@@ -204,8 +204,8 @@ it. Run from a plain terminal, it delivers to you. Every alert expires, and each
 one rings once unless you pass `--standing`. `--dry-run` validates and prints
 the alert as it would be stored, without saving it.
 
-`demarchy-setup --help` lists every verb and the parameters each operator
-takes, and `demarchy-setup catalogue` prints every watchable path with its kind
+`demarchy --help` lists every verb and the parameters each operator
+takes, and `demarchy catalogue` prints every watchable path with its kind
 and operators, generated from the source so it cannot go stale.
 
 What can be watched is exactly what is in the panel: the ticket price and its

@@ -377,7 +377,7 @@ func Classify(err error) (string, string) {
 	case err == nil:
 		return "", ""
 	case errors.Is(err, ErrNoToken):
-		return "no-token", "no token configured; run demarchy-setup"
+		return "no-token", "no token configured; run demarchy add"
 	case errors.Is(err, ErrUnauthorized):
 		return "auth", "dcrpulse rejected the token"
 	case errors.Is(err, ErrPlaintextRefused):

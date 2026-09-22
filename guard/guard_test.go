@@ -205,15 +205,14 @@ func TestQMLFlagsExist(t *testing.T) {
 	}
 }
 
-// pinnedVerbs is every verb demarchy-setup offers. The empty verb is the
-// interactive wizard.
+// pinnedVerbs is every verb demarchy offers.
 //
-// Dispatch is spread over three places, so a verb can be added without the
-// usage text or anything else noticing. Pinning the set is what makes a removed
-// verb stay removed: re-adding one fails here, by name.
+// Dispatch is split between a verb table and two switches, so a verb can be
+// added without the usage text or anything else noticing. Pinning the set is
+// what makes a removed verb stay removed: re-adding one fails here, by name.
 var pinnedVerbs = []string{
-	"", "allow-http", "alerts", "arm", "catalogue", "check", "disallow-http",
-	"disarm", "edit", "list", "purge", "remove",
+	"add", "allow-http", "alerts", "arm", "catalogue", "check",
+	"disallow-http", "disarm", "edit", "list", "purge", "remove",
 }
 
 var (
@@ -224,8 +223,8 @@ var (
 func TestSetupVerbsArePinned(t *testing.T) {
 	found := map[string]bool{}
 	for _, file := range []string{
-		"../cmd/demarchy-setup/main.go",
-		"../cmd/demarchy-setup/alerts.go",
+		"../cmd/demarchy/verbs.go",
+		"../cmd/demarchy/alerts.go",
 	} {
 		body, err := os.ReadFile(file)
 		if err != nil {
@@ -257,6 +256,35 @@ func TestSetupVerbsArePinned(t *testing.T) {
 		t.Fatal("found no verbs, the dispatch pattern has drifted")
 	}
 
+	// The verbs map is the gate: a verb dispatched but not listed there is
+	// unreachable, and one listed but not dispatched answers "unknown
+	// command". Both are silent, so both are checked.
+	body, err := os.ReadFile("../cmd/demarchy/verbs.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(body)
+	at := strings.Index(text, "var verbs = map[string]bool{")
+	if at < 0 {
+		t.Fatal("cmd/demarchy/verbs.go: no verbs map, the pattern has drifted")
+	}
+	table := text[at:]
+	table = table[:strings.Index(table, "}")]
+	gated := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"([a-z][a-z0-9-]*)":\s*true`).FindAllStringSubmatch(table, -1) {
+		gated[m[1]] = true
+	}
+	for v := range found {
+		if !gated[v] {
+			t.Errorf("verb %q is dispatched but missing from the verbs map, so it is unreachable", v)
+		}
+	}
+	for v := range gated {
+		if !found[v] {
+			t.Errorf("verb %q is in the verbs map but nothing dispatches it", v)
+		}
+	}
+
 	pinned := map[string]bool{}
 	for _, v := range pinnedVerbs {
 		pinned[v] = true
@@ -266,7 +294,7 @@ func TestSetupVerbsArePinned(t *testing.T) {
 	}
 	for v := range found {
 		if !pinned[v] {
-			t.Errorf("demarchy-setup offers %q, which is not pinned", v)
+			t.Errorf("demarchy offers %q, which is not pinned", v)
 		}
 	}
 }

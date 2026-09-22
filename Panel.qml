@@ -1152,7 +1152,7 @@ Panel {
                 root.persist(patch)
               }
             }
-            onRunSetup: root.runTerminal(root.pluginDir + "/bin/demarchy-setup")
+            onRunSetup: root.runTerminal(root.pluginDir + "/bin/demarchy add")
           }
 
           // ---- alerts view. The page arms, edits and disarms through the

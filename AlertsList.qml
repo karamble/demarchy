@@ -523,7 +523,7 @@ Column {
     width: root.width
     visible: root.editing === "" && root.triggersError === "" && root.triggers.length === 0
     wrapMode: Text.WordWrap
-    text: "Nothing armed. Arm one from a terminal: demarchy-setup arm price.dcrUsd "
+    text: "Nothing armed. Arm one from a terminal: demarchy arm price.dcrUsd "
           + "crosses --above 16 --expires 4d --reason \"...\""
     textFormat: Text.PlainText
     color: Color.popups.text

@@ -330,7 +330,7 @@ Column {
       var nets = (root.plainHttp.networks || []).join(", ")
       return "Plain http is allowed via " + root.plainHttp["interface"] + " to "
              + nets + " (expert setting in connections.json; change it with "
-             + "demarchy-setup allow-http)."
+             + "demarchy allow-http)."
     }
     textFormat: Text.PlainText
     color: root.configError !== "" ? Color.urgent : Color.popups.text

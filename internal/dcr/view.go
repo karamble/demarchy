@@ -161,7 +161,7 @@ func FireText(t *Trigger, now time.Time) string {
 	if t.IsOnce() {
 		b.WriteString(" This was a one-shot and is now spent.")
 	} else {
-		fmt.Fprintf(&b, " It stays armed until %s; disarm with: demarchy-setup disarm %s.",
+		fmt.Fprintf(&b, " It stays armed until %s; disarm with: demarchy disarm %s.",
 			t.ExpiresAt.UTC().Format(time.RFC3339), t.ID)
 	}
 	return b.String()

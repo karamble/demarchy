@@ -190,10 +190,10 @@ func (p Policy) Refusal(host string) string {
 	}
 	if !p.Enabled() {
 		return base + fmt.Sprintf(". Or, if %s is a WireGuard mesh peer, allow it "+
-			"with: demarchy-setup allow-http %s/32 --via <mesh interface>", host, host)
+			"with: demarchy allow-http %s/32 --via <mesh interface>", host, host)
 	}
 	return fmt.Sprintf("plain http is allowed via %s to %s only. Add this peer "+
-		"with: demarchy-setup allow-http %s/32", p.iface, strings.Join(p.Networks(), ", "), host)
+		"with: demarchy allow-http %s/32", p.iface, strings.Join(p.Networks(), ", "), host)
 }
 
 // ResolveCovered turns a hostname into the one address the policy allows, so

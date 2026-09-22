@@ -32,6 +32,29 @@ import (
 )
 
 func main() {
+	// One binary, two shapes. A verb is a person or an agent managing
+	// connections and alerts; a flag is the panel asking for snapshots. Verbs
+	// are dispatched before any flag is parsed and before the monitoring gate
+	// below, because listing or disarming an alert has nothing to watch for.
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") {
+		if !verbs[os.Args[1]] {
+			fmt.Fprintf(os.Stderr, "error: unknown command %q; run demarchy for the list\n", os.Args[1])
+			os.Exit(1)
+		}
+		if err := run(os.Args[1:]); err != nil {
+			fmt.Fprintln(os.Stderr, "error:", err)
+			os.Exit(1)
+		}
+		return
+	}
+	// Bare invocation is somebody at a terminal, not the panel, which always
+	// passes a flag.
+	if len(os.Args) == 1 {
+		usage(os.Stdout)
+		return
+	}
+	flag.Usage = func() { usage(os.Stderr) }
+
 	var (
 		once      = flag.Bool("once", false, "print one snapshot and exit")
 		endpoint  = flag.String("endpoint", "", "dcrpulse MCP endpoint (default: shell.json, else "+dcr.DefaultEndpoint+")")

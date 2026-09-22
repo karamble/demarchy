@@ -11,11 +11,10 @@ VERSION ?= 0.2.0
 
 all: build
 
-# Both binaries together: a connections.json carrying a plain-http exception is
-# written as version 2, and a helper older than the wizard refuses to read it.
+# One binary: the snapshot feed and the connection and alert verbs share it, so
+# there is no second program to keep in step with the first.
 build: toolchain
-	$(GO) build -trimpath -o bin/demarchy       ./cmd/demarchy
-	$(GO) build -trimpath -o bin/demarchy-setup ./cmd/demarchy-setup
+	$(GO) build -trimpath -o bin/demarchy ./cmd/demarchy
 
 # The FAQ the toolchain preflight points at. Install instructions belong in
 # documentation a person can read and correct, not in a build target.

@@ -118,7 +118,7 @@ func parseArmFlags(args []string) (armFlags, error) {
 			f.req.DeliverTo, err = text(i, "a herdr agent name or pane id, or you")
 			i++
 		case "--connection":
-			f.req.Connection, err = text(i, "a connection id from: demarchy-setup list")
+			f.req.Connection, err = text(i, "a connection id from: demarchy list")
 			i++
 		case "--standing":
 			f.req.Once = boolPtr(false)
@@ -160,8 +160,8 @@ func arm(args []string) error {
 		return err
 	}
 	if len(f.positional) != 2 {
-		return errors.New("usage: demarchy-setup arm <path> <operator> [params] --expires <4d|12h|date> " +
-			"[--reason <text>] [--deliver <agent|you>] [--standing] [--dry-run]; see: demarchy-setup catalogue")
+		return errors.New("usage: demarchy arm <path> <operator> [params] --expires <4d|12h|date> " +
+			"[--reason <text>] [--deliver <agent|you>] [--standing] [--dry-run]; see: demarchy catalogue")
 	}
 	f.req.Path, f.req.Operator = f.positional[0], f.positional[1]
 	identify(&f.req)
@@ -189,7 +189,7 @@ func editAlert(args []string) error {
 	case 3:
 		f.req.Path, f.req.Operator = f.positional[1], f.positional[2]
 	default:
-		return errors.New("usage: demarchy-setup edit <id> [<path> <operator>] [params] [--expires ...] [--reason ...] [--deliver ...] [--standing|--once] [--dry-run]")
+		return errors.New("usage: demarchy edit <id> [<path> <operator>] [params] [--expires ...] [--reason ...] [--deliver ...] [--standing|--once] [--dry-run]")
 	}
 	if f.dryRun {
 		t, warnings, err := dcr.PrepareEdit(f.positional[0], f.req, time.Now())
@@ -207,7 +207,7 @@ func editAlert(args []string) error {
 
 func disarm(args []string) error {
 	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
-		return errors.New("usage: demarchy-setup disarm <id>")
+		return errors.New("usage: demarchy disarm <id>")
 	}
 	t, err := dcr.Disarm(args[0])
 	if err != nil {
@@ -277,7 +277,7 @@ func listAlerts(args []string) error {
 		return printJSON(views)
 	}
 	if len(views) == 0 {
-		fmt.Println("No alerts armed. Arm one with: demarchy-setup arm <path> <operator> ... --expires 4d")
+		fmt.Println("No alerts armed. Arm one with: demarchy arm <path> <operator> ... --expires 4d")
 		return nil
 	}
 
@@ -358,7 +358,7 @@ func onlyJSONFlag(args []string, verb string) (bool, error) {
 	case len(args) == 1 && args[0] == "--json":
 		return true, nil
 	}
-	return false, fmt.Errorf("usage: demarchy-setup %s [--json]", verb)
+	return false, fmt.Errorf("usage: demarchy %s [--json]", verb)
 }
 
 func printJSON(v interface{}) error {
@@ -372,18 +372,6 @@ func printJSON(v interface{}) error {
 
 // activeConnectionID is what the widget watches, or "" when that cannot be
 // told, in which case nothing is marked as being on another connection.
-func activeConnectionID() string {
-	list, err := dcr.LoadConnections()
-	if err != nil {
-		return ""
-	}
-	conn, err := list.Active(dcr.StringSetting("activeConnection", ""))
-	if err != nil {
-		return ""
-	}
-	return conn.ID
-}
-
 // untilText says how long is left in the coarsest unit that is still honest.
 func untilText(d time.Duration) string {
 	if d <= 0 {

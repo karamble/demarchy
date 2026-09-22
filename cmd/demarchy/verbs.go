@@ -2,26 +2,23 @@
 // Use of this source code is governed by an ISC
 // license that can be found in the LICENSE file.
 
-// Command demarchy-setup stores and validates the MCP token the Decred
-// Pulse widget uses.
+// The connection and alert verbs. These share the binary with the snapshot
+// feed in main.go: one build, one file in bin/, and the verbs reach the same
+// stores the feed does without a second program to keep in step.
 //
-// It is a separate binary so the Quickshell process never handles the token:
-// the panel launches this in a terminal, and only ever learns whether a token
-// is present and valid.
-//
-// The token it accepts is deliberately weak. dcrpulse issues per-agent tokens
-// whose read domains, write scopes and spend caps are set in the dashboard
-// (Settings -> AI Agents), so a widget can hold a credential that can read
-// node and staking state and nothing else. This tool refuses to store anything
-// stronger than that.
+// The token a connection accepts is deliberately weak. dcrpulse issues
+// per-agent tokens whose read domains, write scopes and spend caps are set in
+// the dashboard (Settings -> AI Agents), so a widget can hold a credential
+// that can read node and staking state and nothing else. Anything stronger is
+// refused.
 package main
 
 import (
 	"bufio"
 	"context"
 	"errors"
-	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -66,37 +63,45 @@ func requiredDomains() []string {
 	return out
 }
 
-func main() {
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, `demarchy-setup: manage the dcrpulse connections the bar widget uses.
+// verbs are the subcommands. Anything else on argv is read as a flag for the
+// snapshot feed in main.go.
+var verbs = map[string]bool{
+	"add": true, "list": true, "check": true, "remove": true, "purge": true,
+	"catalogue": true, "alerts": true, "arm": true, "edit": true, "disarm": true,
+	"allow-http": true, "disallow-http": true,
+}
 
-  demarchy-setup              add a connection (prompts for name, endpoint, token)
-  demarchy-setup list         list the stored connections
-  demarchy-setup check        re-validate every stored connection
-  demarchy-setup remove <id>  delete a connection and its token
-  demarchy-setup purge        delete every connection and token, and the alerts board
+func usage(w io.Writer) {
+	fmt.Fprintf(w, `demarchy: the Decred Pulse bar widget helper.
 
-  demarchy-setup catalogue    every value an alert can watch, with its operators
-  demarchy-setup alerts       what is armed, grouped by who will hear it
-  demarchy-setup arm <path> <operator> [params] --expires <4d|12h|date> [--reason <text>]
+  demarchy add                add a connection (prompts for name, endpoint, token)
+  demarchy list               list the stored connections
+  demarchy check              re-validate every stored connection
+  demarchy remove <id>        delete a connection and its token
+  demarchy purge              delete every connection and token, and the alerts board
+
+  demarchy catalogue          every value an alert can watch, with its operators
+  demarchy alerts             what is armed, grouped by who will hear it
+  demarchy arm <path> <operator> [params] --expires <4d|12h|date> [--reason <text>]
                               [--deliver <agent|you>] [--standing] [--connection <id>] [--dry-run]
-  demarchy-setup edit <id> [same flags]
-  demarchy-setup disarm <id>
+  demarchy edit <id> [same flags]
+  demarchy disarm <id>
 
   Params by operator: --above X | --below X [--rearm R]; --value V [--hold 5m];
   --by X [--percent]; --for 45m; --where field=value (or field~=text) [--key field].
   Inside a herdr pane, arm delivers back to that agent unless --deliver says otherwise.
   --dry-run validates and prints the trigger as it would be stored, saving nothing.
 
+The panel runs the snapshot feed instead of a verb:
+
+  demarchy --messages 40      stream snapshots as JSON, one per line
+  demarchy --once             print one snapshot and exit
+  demarchy --apply            apply one JSON connection command from stdin
+  demarchy --triggers         apply one JSON alerts command from stdin
+  demarchy -h                 every flag
+
 Tokens are stored in %s, mode 0600; alerts in %s.
 `, dcr.ConnectionsPath(), dcr.TriggersPath())
-	}
-	flag.Parse()
-
-	if err := run(flag.Args()); err != nil {
-		fmt.Fprintln(os.Stderr, "error:", err)
-		os.Exit(1)
-	}
 }
 
 func run(args []string) error {
@@ -132,7 +137,7 @@ func run(args []string) error {
 		return checkConnections(list)
 	case "remove":
 		if len(args) < 2 {
-			return errors.New("usage: demarchy-setup remove <id>")
+			return errors.New("usage: demarchy remove <id>")
 		}
 		if err := list.Remove(args[1]); err != nil {
 			return err
@@ -142,7 +147,7 @@ func run(args []string) error {
 		}
 		fmt.Printf("Removed %q and its token.\n", args[1])
 		return nil
-	case "":
+	case "add":
 		return addConnection(list)
 	default:
 		return fmt.Errorf("unknown command %q; try --help", verb)
@@ -214,7 +219,7 @@ func listConnections(list *dcr.Connections) error {
 		fmt.Println()
 	}
 	if len(list.Conns) == 0 {
-		fmt.Println("No connections yet. Run demarchy-setup to add one.")
+		fmt.Println("No connections yet. Run demarchy add to add one.")
 		return nil
 	}
 	active := dcr.StringSetting("activeConnection", "")
@@ -460,7 +465,7 @@ func allowHTTP(list *dcr.Connections, args []string) error {
 		}
 	}
 	if cidr == "" {
-		return errors.New("usage: demarchy-setup allow-http <cidr|mesh-hostname> " +
+		return errors.New("usage: demarchy allow-http <cidr|mesh-hostname> " +
 			"[--via <interface>] [--note <text>]")
 	}
 
@@ -508,7 +513,7 @@ func allowHTTP(list *dcr.Connections, args []string) error {
 // disallowHTTP removes one address, and names anything it strands.
 func disallowHTTP(list *dcr.Connections, args []string) error {
 	if len(args) < 1 {
-		return errors.New("usage: demarchy-setup disallow-http <cidr>")
+		return errors.New("usage: demarchy disallow-http <cidr>")
 	}
 	if list.PlainHTTP == nil {
 		return errors.New("no plain-http exception is set")
